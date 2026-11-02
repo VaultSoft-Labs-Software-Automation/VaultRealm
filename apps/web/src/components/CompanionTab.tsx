@@ -1251,6 +1251,22 @@ export function CompanionTab({ serverId }: CompanionTabProps) {
                             📝 JSON Mode
                           </span>
                         )}
+                        {ep.keyDecryptionFailed && (
+                          <span
+                            title="The stored API key cannot be decrypted (the encryption secret changed). Click Edit (✏️) and re-enter your API key to restore functionality."
+                            style={{
+                              fontSize: '0.7rem',
+                              padding: '2px 7px',
+                              borderRadius: '10px',
+                              background: 'rgba(239, 68, 68, 0.2)',
+                              color: '#f87171',
+                              border: '1px solid rgba(239, 68, 68, 0.4)',
+                              fontWeight: 600,
+                            }}
+                          >
+                            ⚠️ Re-enter Key
+                          </span>
+                        )}
                       </div>
                       <div style={{ fontSize: '0.8rem', color: '#94a3b8', marginTop: '2px', wordBreak: 'break-all' }}>
                         {ep.baseUrl}
@@ -1406,6 +1422,23 @@ export function CompanionTab({ serverId }: CompanionTabProps) {
           <h3 style={{ margin: '0 0 16px', fontSize: '1.05rem', fontWeight: 600, color: '#f8fafc' }}>
             {editingId ? 'Edit LLM Endpoint' : 'Connect New AI Provider'}
           </h3>
+
+          {editingId && endpoints.find((e) => e.id === editingId)?.keyDecryptionFailed && (
+            <div
+              style={{
+                marginBottom: '16px',
+                padding: '12px 14px',
+                borderRadius: '8px',
+                background: 'rgba(239, 68, 68, 0.15)',
+                border: '1px solid rgba(239, 68, 68, 0.3)',
+                color: '#fca5a5',
+                fontSize: '0.85rem',
+                lineHeight: 1.4,
+              }}
+            >
+              ⚠️ <strong>API Key needs to be re-entered:</strong> The panel encryption secret was updated, so the previously stored key could not be decrypted. Please type your API key below and click <strong>Save</strong> to restore functionality.
+            </div>
+          )}
 
           {!editingId && presets.length > 0 && (
             <div style={{ marginBottom: '18px' }}>

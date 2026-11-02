@@ -1,4 +1,7 @@
 import { z } from 'zod';
+import fs from 'node:fs';
+import path from 'node:path';
+import crypto from 'node:crypto';
 
 const envSchema = z.object({
   /** Port for the Fastify API server */
@@ -73,7 +76,56 @@ let _config: Config | null = null;
  * In tests, pass overrides to avoid needing real env vars.
  */
 export function loadConfig(overrides?: Record<string, string>): Config {
-  const source = overrides ?? process.env;
+  const isExplicitOverrides = overrides !== undefined;
+  const source: Record<string, unknown> = { ...(overrides ?? process.env) };
+
+  // When running normally (without unit test overrides), ensure PANEL_SECRET is persistent
+  if (!isExplicitOverrides) {
+    const rawSecret = typeof source.PANEL_SECRET === 'string' ? source.PANEL_SECRET.trim() : '';
+    const dataDir = typeof source.DATA_DIR === 'string' && source.DATA_DIR.trim() ? source.DATA_DIR.trim() : './data';
+    const secretFile = path.resolve(dataDir, '.panel_secret');
+
+    if (!rawSecret || rawSecret.length < 16) {
+      // 1. Try reading existing secret from persistent data directory
+      if (fs.existsSync(secretFile)) {
+        try {
+          const stored = fs.readFileSync(secretFile, 'utf8').trim();
+          if (stored.length >= 16) {
+            source.PANEL_SECRET = stored;
+          }
+        } catch {
+          // ignore read error
+        }
+      }
+
+      // 2. Auto-generate and persist if still missing
+      if (!source.PANEL_SECRET || (typeof source.PANEL_SECRET === 'string' && source.PANEL_SECRET.length < 16)) {
+        const generated = crypto.randomBytes(32).toString('hex');
+        source.PANEL_SECRET = generated;
+        try {
+          if (!fs.existsSync(dataDir)) {
+            fs.mkdirSync(dataDir, { recursive: true });
+          }
+          fs.writeFileSync(secretFile, generated, { mode: 0o600 });
+        } catch (err) {
+          console.warn('[config] Could not persist generated PANEL_SECRET:', err);
+        }
+      }
+    } else {
+      // If PANEL_SECRET was provided via env, ensure it is also saved in .panel_secret for persistence
+      try {
+        if (!fs.existsSync(secretFile)) {
+          if (!fs.existsSync(dataDir)) {
+            fs.mkdirSync(dataDir, { recursive: true });
+          }
+          fs.writeFileSync(secretFile, rawSecret, { mode: 0o600 });
+        }
+      } catch {
+        // ignore
+      }
+    }
+  }
+
   const result = envSchema.safeParse(source);
 
   if (!result.success) {

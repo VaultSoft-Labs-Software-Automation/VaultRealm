@@ -135,11 +135,13 @@ export async function companionRoutes(app: FastifyInstance): Promise<void> {
     return {
       endpoints: rows.map((r) => {
         let lastFour: string | null = null;
+        let keyDecryptionFailed = false;
         if (r.apiKeyEnc) {
           try {
             lastFour = maskApiKey(decryptApiKey(r.apiKeyEnc));
           } catch {
             lastFour = '****';
+            keyDecryptionFailed = true;
           }
         }
         return {
@@ -151,6 +153,7 @@ export async function companionRoutes(app: FastifyInstance): Promise<void> {
           defaultModel: r.defaultModel,
           lastFour,
           hasKey: !!r.apiKeyEnc,
+          keyDecryptionFailed,
           supportsTools: r.supportsTools,
           timeoutS: r.timeoutS,
           createdAt: r.createdAt,
