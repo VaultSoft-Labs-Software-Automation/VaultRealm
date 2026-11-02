@@ -320,7 +320,7 @@ export async function botRoutes(app: FastifyInstance): Promise<void> {
         await driver.removeContainer(bot.containerId).catch(() => {});
       }
 
-      // Ensure bot runner image is present locally; pull automatically if missing
+      // Ensure bot runner image is present locally; pull automatically if missing or if force-pull requested
       const configuredImage = config.BOT_RUNNER_IMAGE || 'hypertextassassin/vaultrealm-bot-runner:latest';
       const candidateImages = Array.from(
         new Set([
@@ -330,11 +330,30 @@ export async function botRoutes(app: FastifyInstance): Promise<void> {
         ]),
       );
 
+      const shouldForcePull = Boolean(
+        (request.body as { pull?: boolean } | undefined)?.pull ||
+          (request.query as { pull?: string } | undefined)?.pull === 'true',
+      );
+
       let imageToUse: string | null = null;
-      for (const img of candidateImages) {
-        if (await driver.hasImage(img)) {
-          imageToUse = img;
-          break;
+
+      if (shouldForcePull) {
+        try {
+          console.log(`[bot] Force-pulling latest bot runner image "${configuredImage}"...`);
+          await driver.pullImage(configuredImage);
+          imageToUse = configuredImage;
+          console.log(`[bot] Successfully pulled latest bot runner image: "${configuredImage}".`);
+        } catch (err) {
+          console.warn(`[bot] Force pull of "${configuredImage}" failed, falling back to local image:`, err);
+        }
+      }
+
+      if (!imageToUse) {
+        for (const img of candidateImages) {
+          if (await driver.hasImage(img)) {
+            imageToUse = img;
+            break;
+          }
         }
       }
 

@@ -313,6 +313,30 @@ describe('Phase 6b — Bot Runner Lifecycle & Management Routes', () => {
       expect(pulledImages[0]).toContain('bot-runner');
     });
 
+    it('forces pull of latest bot runner image when pull: true is passed', async () => {
+      const db = getDatabase();
+      db.update(servers).set({ status: 'running' }).where(eq(servers.id, serverId)).run();
+
+      const driver = getDockerDriver();
+      const pulledImages: string[] = [];
+      const origPullImage = driver.pullImage.bind(driver);
+      driver.pullImage = async (image: string) => {
+        pulledImages.push(image);
+        return origPullImage(image);
+      };
+
+      const res = await app.inject({
+        method: 'POST',
+        url: `/api/servers/${serverId}/companion/bot/spawn`,
+        cookies: { vr_session: userCookie },
+        payload: { pull: true },
+      });
+
+      expect(res.statusCode).toBe(200);
+      expect(res.json().success).toBe(true);
+      expect(pulledImages).toContain('hypertextassassin/vaultrealm-bot-runner:latest');
+    });
+
     it('rejects duplicate spawn if bot is already active', async () => {
       const db = getDatabase();
       db.update(servers).set({ status: 'running' }).where(eq(servers.id, serverId)).run();
