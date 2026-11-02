@@ -39,6 +39,9 @@ export function CompanionTab({ serverId }: CompanionTabProps) {
   const [botAuthMode, setBotAuthMode] = useState<'offline' | 'microsoft' | 'proxy'>('offline');
   const [botBudget, setBotBudget] = useState<number | ''>(200000);
   const [botRpm, setBotRpm] = useState(10);
+  const [botWhoCanCommand, setBotWhoCanCommand] = useState<'everyone' | 'trusted' | 'owner_only'>('everyone');
+  const [botOwnerPlayerName, setBotOwnerPlayerName] = useState('');
+  const [botTrustedPlayers, setBotTrustedPlayers] = useState('');
   const [savingBot, setSavingBot] = useState(false);
   const [spawningBot, setSpawningBot] = useState(false);
   const [actionLoading, setActionLoading] = useState<string | null>(null);
@@ -126,6 +129,17 @@ export function CompanionTab({ serverId }: CompanionTabProps) {
         setBotAuthMode(botRes.bot.authMode);
         setBotBudget(botRes.bot.dailyTokenBudget);
         setBotRpm(botRes.bot.rpmLimit);
+        setBotWhoCanCommand(
+          botRes.bot.whoCanCommand === 'owner' || botRes.bot.whoCanCommand === 'owner_only'
+            ? 'owner_only'
+            : botRes.bot.whoCanCommand === 'trusted'
+              ? 'trusted'
+              : 'everyone',
+        );
+        setBotOwnerPlayerName(botRes.bot.ownerPlayerName ?? '');
+        setBotTrustedPlayers(
+          Array.isArray(botRes.bot.trustedPlayers) ? botRes.bot.trustedPlayers.join(', ') : '',
+        );
       } else if (endpointsRes.endpoints.length > 0 && !botEndpointId) {
         setBotEndpointId(endpointsRes.endpoints[0].id);
       }
@@ -267,6 +281,12 @@ export function CompanionTab({ serverId }: CompanionTabProps) {
         model: botModel.trim() || null,
         mode: botMode,
         authMode: botAuthMode,
+        whoCanCommand: botWhoCanCommand,
+        ownerPlayerName: botOwnerPlayerName.trim() || undefined,
+        trustedPlayers: botTrustedPlayers
+          .split(',')
+          .map((p) => p.trim())
+          .filter(Boolean),
         dailyTokenBudget: typeof botBudget === 'number' ? Math.max(1000, botBudget) : (parseInt(String(botBudget), 10) || 200000),
         rpmLimit: botRpm,
       });
@@ -909,6 +929,99 @@ export function CompanionTab({ serverId }: CompanionTabProps) {
                     {preset.label}
                   </button>
                 ))}
+              </div>
+            </div>
+          </div>
+
+          {/* Permissions & In-Game Command Policy */}
+          <div
+            style={{
+              padding: '16px',
+              borderRadius: '10px',
+              background: 'rgba(15, 23, 42, 0.4)',
+              border: '1px solid rgba(255, 255, 255, 0.08)',
+              display: 'flex',
+              flexDirection: 'column',
+              gap: '14px',
+            }}
+          >
+            <div style={{ fontSize: '0.875rem', fontWeight: 600, color: '#f8fafc' }}>
+              🛡️ In-Game Permissions & Player Roles
+            </div>
+
+            <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(220px, 1fr))', gap: '14px' }}>
+              <div>
+                <label style={{ display: 'block', fontSize: '0.8rem', color: '#94a3b8', marginBottom: '6px' }}>
+                  Who Can Command Buddy
+                </label>
+                <select
+                  value={botWhoCanCommand}
+                  onChange={(e) => setBotWhoCanCommand(e.target.value as 'everyone' | 'trusted' | 'owner_only')}
+                  style={{
+                    width: '100%',
+                    padding: '9px 12px',
+                    borderRadius: '8px',
+                    background: 'rgba(15, 23, 42, 0.6)',
+                    border: '1px solid rgba(255, 255, 255, 0.12)',
+                    color: '#f8fafc',
+                    fontSize: '0.875rem',
+                  }}
+                >
+                  <option value="everyone">Everyone (All players can chat & give movement commands)</option>
+                  <option value="trusted">Trusted Players Only (Owner + Trusted list)</option>
+                  <option value="owner_only">Owner Only (Only server owner)</option>
+                </select>
+                <div style={{ fontSize: '0.72rem', color: '#64748b', marginTop: '4px' }}>
+                  Guests can use friendly skills (follow, come, stay). Mining and advanced tasks always require trusted/owner.
+                </div>
+              </div>
+
+              <div>
+                <label style={{ display: 'block', fontSize: '0.8rem', color: '#94a3b8', marginBottom: '6px' }}>
+                  In-Game Owner (Minecraft Username)
+                </label>
+                <input
+                  type="text"
+                  value={botOwnerPlayerName}
+                  onChange={(e) => setBotOwnerPlayerName(e.target.value)}
+                  placeholder="e.g. BugFire"
+                  style={{
+                    width: '100%',
+                    padding: '9px 12px',
+                    borderRadius: '8px',
+                    background: 'rgba(15, 23, 42, 0.6)',
+                    border: '1px solid rgba(255, 255, 255, 0.12)',
+                    color: '#f8fafc',
+                    fontSize: '0.875rem',
+                  }}
+                />
+                <div style={{ fontSize: '0.72rem', color: '#64748b', marginTop: '4px' }}>
+                  Your in-game player name. If empty, automatically inherits from server operators (ops.json).
+                </div>
+              </div>
+
+              <div>
+                <label style={{ display: 'block', fontSize: '0.8rem', color: '#94a3b8', marginBottom: '6px' }}>
+                  Trusted Players (Optional)
+                </label>
+                <input
+                  type="text"
+                  value={botTrustedPlayers}
+                  onChange={(e) => setBotTrustedPlayers(e.target.value)}
+                  placeholder="e.g. Steve, Alex"
+                  style={{
+                    width: '100%',
+                    padding: '9px 12px',
+                    borderRadius: '8px',
+                    background: 'rgba(15, 23, 42, 0.6)',
+                    border: '1px solid rgba(255, 255, 255, 0.12)',
+                    color: '#f8fafc',
+                    fontSize: '0.875rem',
+                  }}
+                />
+                <div style={{ fontSize: '0.72rem', color: '#64748b', marginTop: '4px' }}>
+                  Comma-separated usernames allowed to assign resource mining, crafting, and tasks.
+                </div>
               </div>
             </div>
           </div>

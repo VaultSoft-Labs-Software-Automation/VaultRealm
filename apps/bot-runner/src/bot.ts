@@ -26,6 +26,7 @@ import {
   type BlockSummary,
 } from './perception.js';
 import { resolveTargetHost } from './dns-fallback.js';
+import { getPlayerRole, canPlayerExecuteSkill } from './permissions.js';
 
 export class CompanionBotRunner {
   private config: BotConfig;
@@ -220,9 +221,36 @@ export class CompanionBotRunner {
     const statusSnapshot = this.getStatusSnapshot();
     const fastCmd = handleFastCommand(content, this.config.botName, statusSnapshot);
     if (fastCmd.isFastCommand) {
+      if (fastCmd.command && fastCmd.command !== 'help') {
+        const role = getPlayerRole(
+          username,
+          this.config.ownerName ?? 'admin',
+          this.config.trustedPlayers ?? [],
+        );
+        const policy = this.config.whoCanCommand ?? 'everyone';
+        const auth = canPlayerExecuteSkill(role, policy, fastCmd.command);
+        if (!auth.allowed) {
+          this.bot.chat(`[${this.config.botName}] ${auth.reason || 'Sorry, you do not have permission to use that command.'}`);
+          return;
+        }
+      }
+
+      this.executor.updateContext({
+        speaker: username,
+        protectedZones: this.config.protectedZones,
+        savedPlaces: this.config.savedPlaces,
+      });
+
       if (fastCmd.command === 'stop') {
         this.executor.abortCurrent();
+      } else if (fastCmd.command === 'come') {
+        void this.executor.come();
+      } else if (fastCmd.command === 'follow') {
+        void this.executor.follow(username);
+      } else if (fastCmd.command === 'stay') {
+        void this.executor.stay();
       }
+
       if (fastCmd.reply) {
         this.bot.chat(fastCmd.reply);
       }
