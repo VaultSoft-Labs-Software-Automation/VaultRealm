@@ -484,9 +484,10 @@ export const api = {
       method: 'PUT',
       body: JSON.stringify(data),
     }),
-  spawnBot: (serverId: string) =>
+  spawnBot: (serverId: string, pull?: boolean) =>
     request<{ success: boolean; status: string; containerId: string }>(`/api/servers/${serverId}/companion/bot/spawn`, {
       method: 'POST',
+      body: pull ? JSON.stringify({ pull: true }) : undefined,
     }),
   despawnBot: (serverId: string) =>
     request<{ success: boolean; status: string }>(`/api/servers/${serverId}/companion/bot/despawn`, {
