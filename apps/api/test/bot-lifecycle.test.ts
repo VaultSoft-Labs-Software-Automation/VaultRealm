@@ -10,6 +10,7 @@ import {
 } from './helpers.js';
 import { getDatabase } from '../src/db/index.js';
 import { servers, serverPorts, bots, llmEndpoints, events, auditLog } from '../src/db/schema.js';
+import { getDockerDriver } from '../src/servers/service.js';
 import { eq } from 'drizzle-orm';
 
 describe('Phase 6b — Bot Runner Lifecycle & Management Routes', () => {
@@ -233,6 +234,30 @@ describe('Phase 6b — Bot Runner Lifecycle & Management Routes', () => {
       // Verify audit log
       const audits = db.select().from(auditLog).where(eq(auditLog.action, 'bot.spawn')).all();
       expect(audits.length).toBe(1);
+    });
+
+    it('automatically pulls bot runner image when missing before creating container', async () => {
+      const db = getDatabase();
+      db.update(servers).set({ status: 'running' }).where(eq(servers.id, serverId)).run();
+
+      const driver = getDockerDriver();
+      const pulledImages: string[] = [];
+      const origPullImage = driver.pullImage.bind(driver);
+      driver.pullImage = async (image: string) => {
+        pulledImages.push(image);
+        return origPullImage(image);
+      };
+
+      const res = await app.inject({
+        method: 'POST',
+        url: `/api/servers/${serverId}/companion/bot/spawn`,
+        cookies: { vr_session: userCookie },
+      });
+
+      expect(res.statusCode).toBe(200);
+      expect(res.json().success).toBe(true);
+      expect(pulledImages.length).toBeGreaterThanOrEqual(1);
+      expect(pulledImages[0]).toContain('bot-runner');
     });
 
     it('rejects duplicate spawn if bot is already active', async () => {

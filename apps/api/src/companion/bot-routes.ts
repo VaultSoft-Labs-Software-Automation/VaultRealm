@@ -239,13 +239,53 @@ export async function botRoutes(app: FastifyInstance): Promise<void> {
         await driver.removeContainer(bot.containerId).catch(() => {});
       }
 
+      // Ensure bot runner image is present locally; pull automatically if missing
+      const configuredImage = config.BOT_RUNNER_IMAGE || 'hypertextassassin/vaultrealm-bot-runner:latest';
+      const candidateImages = Array.from(
+        new Set([
+          configuredImage,
+          'hypertextassassin/vaultrealm-bot-runner:latest',
+          'vaultrealm/bot-runner:latest',
+        ]),
+      );
+
+      let imageToUse: string | null = null;
+      for (const img of candidateImages) {
+        if (await driver.hasImage(img)) {
+          imageToUse = img;
+          break;
+        }
+      }
+
+      if (!imageToUse) {
+        let lastPullErr: Error | null = null;
+        for (const img of candidateImages) {
+          try {
+            console.log(`[bot] Bot runner image "${img}" not found locally. Pulling image...`);
+            await driver.pullImage(img);
+            imageToUse = img;
+            console.log(`[bot] Successfully pulled bot runner image: "${img}".`);
+            break;
+          } catch (err) {
+            console.warn(`[bot] Could not pull image "${img}":`, err);
+            lastPullErr = err instanceof Error ? err : new Error(String(err));
+          }
+        }
+
+        if (!imageToUse) {
+          throw new Error(
+            `Failed to pull bot runner image (${candidateImages.join(', ')}): ${lastPullErr?.message || 'Image not found'}. Make sure Docker host has internet access or pull '${configuredImage}' manually.`,
+          );
+        }
+      }
+
       const userRecord = db.select().from(users).where(eq(users.id, user.id)).all()[0];
       const ownerName = userRecord?.username ?? 'admin';
 
       const containerName = `vaultrealm-bot-${bot.id}`;
       const containerId = await driver.createContainer({
         name: containerName,
-        image: config.BOT_RUNNER_IMAGE,
+        image: imageToUse,
         labels: {
           'vaultrealm.bot': bot.id,
           'vaultrealm.server': serverId,
