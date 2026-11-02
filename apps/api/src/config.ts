@@ -38,7 +38,9 @@ const envSchema = z.object({
     .transform((val) => val === 'true'),
 
   /** Bot-runner Docker image */
-  BOT_RUNNER_IMAGE: z.string().default('vaultrealm/bot-runner:latest'),
+  BOT_RUNNER_IMAGE: z
+    .string()
+    .default(process.env.BOT_RUNNER_IMAGE || 'hypertextassassin/vaultrealm-bot-runner:latest'),
 
   /** Whether session cookies require HTTPS ('true', 'false', or 'auto' based on request protocol) */
   COOKIE_SECURE: z.enum(['true', 'false', 'auto']).default('auto'),

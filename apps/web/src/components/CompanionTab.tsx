@@ -284,8 +284,17 @@ export function CompanionTab({ serverId }: CompanionTabProps) {
     if (!bot || bot.status === 'offline' || bot.status === 'error') {
       try {
         setSpawningBot(true);
+        addToast({
+          type: 'info',
+          title: 'Preparing Companion...',
+          message: 'Pulling bot container image and launching runner...',
+        });
         await api.spawnBot(serverId);
-        addToast({ type: 'success', title: 'Spawning Companion...', message: 'Bot container started and joining game.' });
+        addToast({
+          type: 'success',
+          title: 'Companion Spawned!',
+          message: 'Bot container started and joining game server.',
+        });
         fetchData();
       } catch (err: unknown) {
         const error = err as ApiError;
@@ -575,7 +584,7 @@ export function CompanionTab({ serverId }: CompanionTabProps) {
               opacity: spawningBot || !bot ? 0.6 : 1,
             }}
           >
-            {spawningBot ? '⏳ Processing...' : isBotActive ? '⏹ Despawn Bot' : '🚀 Spawn Bot into Server'}
+            {spawningBot ? '⏳ Pulling & Starting Bot...' : isBotActive ? '⏹ Despawn Bot' : '🚀 Spawn Bot into Server'}
           </button>
         </div>
 
