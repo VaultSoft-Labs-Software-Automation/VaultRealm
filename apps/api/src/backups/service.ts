@@ -16,6 +16,7 @@ import { getConfig } from '../config.js';
 import { getServerDataDir } from '../servers/volume.js';
 import { getDockerDriver } from '../servers/service.js';
 import { executeServerCommand } from '../servers/console.js';
+import { getTemplate } from '../servers/templates.js';
 import { writeAudit } from '../audit/log.js';
 import {
   uploadToGoogleDrive,
@@ -154,10 +155,26 @@ export async function createServerBackup(
   if (opts.uploadToDrive) {
     void (async () => {
       try {
+        const template = getTemplate(server.templateId);
+        let dockerImage = template?.image;
+        if (!dockerImage && server.containerId) {
+          try {
+            const driver = getDockerDriver();
+            const info = await driver.inspectContainer(server.containerId);
+            dockerImage = info.image;
+          } catch {
+            // ignore
+          }
+        }
+        if (!dockerImage) {
+          dockerImage = server.templateId;
+        }
+
         const gdrive = await uploadToGoogleDrive({
           filename,
           filePath: backupPath,
           description: `VaultRealm Backup: ${server.name} (${backupId})`,
+          image: dockerImage,
         });
         db.update(backups)
           .set({
@@ -348,10 +365,26 @@ export async function uploadBackupToDrive(
   }
 
   const server = db.select().from(servers).where(eq(servers.id, serverId)).all()[0];
+  const template = server ? getTemplate(server.templateId) : undefined;
+  let dockerImage = template?.image;
+  if (!dockerImage && server?.containerId) {
+    try {
+      const driver = getDockerDriver();
+      const info = await driver.inspectContainer(server.containerId);
+      dockerImage = info.image;
+    } catch {
+      // ignore
+    }
+  }
+  if (!dockerImage) {
+    dockerImage = server?.templateId || 'server';
+  }
+
   const gdrive = await uploadToGoogleDrive({
     filename: path.basename(backup.path),
     filePath: backup.path,
     description: `VaultRealm Backup: ${server?.name || serverId} (${backupId})`,
+    image: dockerImage,
   });
 
   db.update(backups)
@@ -434,6 +467,7 @@ export async function createFullSystemBackup(
         filename,
         filePath: backupPath,
         description: 'VaultRealm Full Panel System Disaster Recovery Backup',
+        image: 'vaultrealm-system',
       });
       gdriveFileId = gdrive.fileId;
       gdriveWebLink = gdrive.webViewLink;

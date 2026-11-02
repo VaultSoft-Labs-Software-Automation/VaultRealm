@@ -11,6 +11,7 @@ import {
 import { getDatabase } from '../src/db/index.js';
 import { servers, serverPorts, bots, llmEndpoints, events, auditLog } from '../src/db/schema.js';
 import { getDockerDriver } from '../src/servers/service.js';
+import type { ContainerCreateOptions } from '../src/docker/driver.js';
 import { eq } from 'drizzle-orm';
 
 describe('Phase 6b — Bot Runner Lifecycle & Management Routes', () => {
@@ -234,6 +235,58 @@ describe('Phase 6b — Bot Runner Lifecycle & Management Routes', () => {
       // Verify audit log
       const audits = db.select().from(auditLog).where(eq(auditLog.action, 'bot.spawn')).all();
       expect(audits.length).toBe(1);
+    });
+
+    it('resolves direct container IP and configures extraHosts for Docker bridge networking', async () => {
+      const db = getDatabase();
+      db.update(servers).set({ status: 'running' }).where(eq(servers.id, serverId)).run();
+
+      const driver = getDockerDriver();
+      let capturedCreateOpts: ContainerCreateOptions | null = null;
+      const origCreateContainer = driver.createContainer.bind(driver);
+      driver.createContainer = async (opts) => {
+        capturedCreateOpts = opts;
+        return origCreateContainer(opts);
+      };
+
+      // Temporarily toggle isMock flag on driver instance to verify bridge networking resolution logic
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any -- override readonly isMock property on test driver instance
+      (driver as any).isMock = false;
+      const origInspect = driver.inspectContainer.bind(driver);
+      driver.inspectContainer = async (id: string) => {
+        if (id === `container-${serverId}`) {
+          return {
+            id,
+            name: `/${id}`,
+            state: { status: 'running', running: true, exitCode: 0, oomKilled: false, startedAt: '', finishedAt: '', error: '' },
+            image: 'itzg/minecraft-server',
+            config: { env: [], labels: {} },
+            hostConfig: { memory: 0, nanoCpus: 0, pidsLimit: 0, restartPolicy: { name: 'no', maximumRetryCount: 0 } },
+            networkSettings: {
+              ports: { '25565/tcp': [{ HostPort: '25000' }] },
+              ipAddress: '172.17.0.2',
+              gateway: '172.17.0.1',
+            },
+            mounts: [],
+          };
+        }
+        return origInspect(id);
+      };
+
+      const res = await app.inject({
+        method: 'POST',
+        url: `/api/servers/${serverId}/companion/bot/spawn`,
+        cookies: { vr_session: userCookie },
+      });
+
+      expect(res.statusCode).toBe(200);
+      expect(capturedCreateOpts).toBeDefined();
+      // Verifies direct bridge connection to container IP & container port
+      expect(capturedCreateOpts.env.SERVER_HOST).toBe('172.17.0.2');
+      expect(capturedCreateOpts.env.SERVER_PORT).toBe('25565');
+      // Verifies extraHosts includes host-gateway mapping for Linux Docker hosts
+      expect(capturedCreateOpts.extraHosts).toContain('host.docker.internal:host-gateway');
+      expect(capturedCreateOpts.extraHosts).toContain('host.docker.internal:172.17.0.1');
     });
 
     it('automatically pulls bot runner image when missing before creating container', async () => {

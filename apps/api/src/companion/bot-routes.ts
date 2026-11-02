@@ -227,8 +227,49 @@ export async function botRoutes(app: FastifyInstance): Promise<void> {
     const gamePortEntry = ports.find((p) => p.name === 'game' || p.containerPort === 25565) ?? ports[0];
     const driver = getDockerDriver();
     const config = getConfig();
-    const serverPort = driver.isMock ? (gamePortEntry ? gamePortEntry.containerPort : 25565) : (gamePortEntry ? gamePortEntry.hostPort : 25565);
-    const serverHost = driver.isMock ? (server.containerId || 'localhost') : 'host.docker.internal';
+
+    let serverHost = 'host.docker.internal';
+    let serverPort = gamePortEntry ? gamePortEntry.hostPort : 25565;
+    let extraHosts: string[] = ['host.docker.internal:host-gateway'];
+    let panelGatewayUrl = config.PANEL_GATEWAY_URL;
+
+    if (driver.isMock) {
+      serverHost = server.containerId || 'localhost';
+      serverPort = gamePortEntry ? gamePortEntry.containerPort : 25565;
+    } else if (server.containerId) {
+      try {
+        const serverInspect = await driver.inspectContainer(server.containerId);
+        const containerIp = serverInspect.networkSettings.ipAddress;
+        const gatewayIp = serverInspect.networkSettings.gateway;
+
+        if (containerIp) {
+          // Direct bridge container-to-container connection (avoids host DNS and firewall restrictions)
+          serverHost = containerIp;
+          serverPort = gamePortEntry ? gamePortEntry.containerPort : 25565;
+        } else if (gatewayIp) {
+          serverHost = gatewayIp;
+          serverPort = gamePortEntry ? gamePortEntry.hostPort : 25565;
+        }
+
+        if (gatewayIp) {
+          extraHosts = [
+            `host.docker.internal:${gatewayIp}`,
+            'host.docker.internal:host-gateway',
+          ];
+        }
+      } catch (err) {
+        console.warn(`[bot] Could not inspect server container ${server.containerId}:`, err);
+      }
+    }
+
+    if (!driver.isMock) {
+      // Containers cannot reach the host panel via "localhost" or "127.0.0.1"
+      if (panelGatewayUrl.includes('localhost')) {
+        panelGatewayUrl = panelGatewayUrl.replace('localhost', 'host.docker.internal');
+      } else if (panelGatewayUrl.includes('127.0.0.1')) {
+        panelGatewayUrl = panelGatewayUrl.replace('127.0.0.1', 'host.docker.internal');
+      }
+    }
 
     const token = createBotToken(bot.id, 86400); // 24h token
 
@@ -286,6 +327,7 @@ export async function botRoutes(app: FastifyInstance): Promise<void> {
       const containerId = await driver.createContainer({
         name: containerName,
         image: imageToUse,
+        extraHosts,
         labels: {
           'vaultrealm.bot': bot.id,
           'vaultrealm.server': serverId,
@@ -298,7 +340,7 @@ export async function botRoutes(app: FastifyInstance): Promise<void> {
           SERVER_PORT: String(serverPort),
           AUTH_MODE: bot.authMode,
           PERSONA: bot.persona,
-          PANEL_GATEWAY_URL: config.PANEL_GATEWAY_URL,
+          PANEL_GATEWAY_URL: panelGatewayUrl,
           BOT_TOKEN: token,
           OWNER_NAME: ownerName,
           WHO_CAN_COMMAND: bot.whoCanCommand === 'owner' || bot.whoCanCommand === 'owner_only' ? 'owner_only' : bot.whoCanCommand === 'trusted' ? 'trusted' : 'everyone',

@@ -25,6 +25,7 @@ import {
   type EntitySummary,
   type BlockSummary,
 } from './perception.js';
+import { resolveTargetHost } from './dns-fallback.js';
 
 export class CompanionBotRunner {
   private config: BotConfig;
@@ -71,14 +72,23 @@ export class CompanionBotRunner {
     console.log(`[BotRunner] Bot "${this.config.botName}" stopped.`);
   }
 
-  private connect(): void {
+  private async connect(): Promise<void> {
+    if (!this.isRunning) return;
+
+    let targetHost = this.config.serverHost;
+    try {
+      targetHost = await resolveTargetHost(this.config.serverHost);
+    } catch (err) {
+      console.warn(`[BotRunner] Error resolving target host "${this.config.serverHost}":`, err);
+    }
+
     console.log(
-      `[BotRunner] Connecting to ${this.config.serverHost}:${this.config.serverPort} as "${this.config.botName}" (auth: ${this.config.authMode})...`,
+      `[BotRunner] Connecting to ${targetHost}:${this.config.serverPort} as "${this.config.botName}" (auth: ${this.config.authMode})...`,
     );
 
     try {
       this.bot = mineflayer.createBot({
-        host: this.config.serverHost,
+        host: targetHost,
         port: this.config.serverPort,
         username: this.config.botName,
         auth: this.config.authMode === 'offline' ? 'offline' : 'microsoft',
@@ -93,6 +103,10 @@ export class CompanionBotRunner {
   }
 
   private setupEventHandlers(bot: mineflayer.Bot): void {
+    bot.on('error', (err: Error) => {
+      console.error(`[BotRunner] Connection error: ${err.message}`);
+    });
+
     bot.on('spawn', async () => {
       console.log(`[BotRunner] "${this.config.botName}" successfully spawned into the game!`);
 

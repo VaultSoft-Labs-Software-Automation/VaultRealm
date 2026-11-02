@@ -10,6 +10,13 @@ import {
   createInvite,
 } from './helpers.js';
 import { getServerDataDir } from '../src/servers/volume.js';
+import {
+  getDockerImageFolderName,
+  getOrCreateDriveSubfolder,
+  clearDriveFolderCache,
+  uploadToGoogleDrive,
+  saveDriveConfig,
+} from '../src/backups/gdrive.js';
 
 describe('Server Backups & Google Drive Integration', () => {
   let app: FastifyInstance;
@@ -363,6 +370,262 @@ describe('Server Backups & Google Drive Integration', () => {
       });
       expect(listRes.statusCode).toBe(200);
       expect(listRes.json().backups.length).toBeGreaterThan(0);
+    });
+  });
+
+  describe('Docker Image-Related Google Drive Subfolder Organization', () => {
+    beforeEach(() => {
+      clearDriveFolderCache();
+    });
+
+    it('formats various Docker image names into clean folder names', () => {
+      expect(getDockerImageFolderName('itzg/minecraft-server:latest')).toBe('itzg-minecraft-server');
+      expect(getDockerImageFolderName('itzg/minecraft-server')).toBe('itzg-minecraft-server');
+      expect(getDockerImageFolderName('thijsvanloef/palworld-server-docker:latest')).toBe(
+        'thijsvanloef-palworld-server-docker',
+      );
+      expect(getDockerImageFolderName('ryshe/terraria:latest')).toBe('ryshe-terraria');
+      expect(getDockerImageFolderName('ghcr.io/vaultrealm/bot-runner:edge')).toBe('vaultrealm-bot-runner');
+      expect(getDockerImageFolderName('docker.io/itzg/minecraft-server:1.20')).toBe('itzg-minecraft-server');
+      expect(getDockerImageFolderName('minecraft-java')).toBe('minecraft-java');
+      expect(getDockerImageFolderName('vaultrealm-system')).toBe('vaultrealm-system');
+    });
+
+    it('looks up existing folder and creates new folder on Drive when missing', async () => {
+      const originalFetch = global.fetch;
+      let searchedQuery = '';
+      let createdBody: Record<string, unknown> | null = null;
+
+      global.fetch = vi.fn().mockImplementation((url: string | URL, init?: RequestInit) => {
+        const urlStr = String(url);
+
+        if (urlStr.includes('/files?') && init?.method !== 'POST') {
+          searchedQuery = decodeURIComponent(urlStr);
+          // Return not found first time
+          return Promise.resolve(
+            new Response(JSON.stringify({ files: [] }), { status: 200 }),
+          );
+        }
+
+        if (urlStr.includes('/files') && init?.method === 'POST') {
+          createdBody = JSON.parse(String(init.body));
+          return Promise.resolve(
+            new Response(JSON.stringify({ id: 'created_folder_id_789', name: createdBody?.name }), {
+              status: 200,
+            }),
+          );
+        }
+
+        return originalFetch(url, init);
+      });
+
+      const folderId = await getOrCreateDriveSubfolder('mock_access_token', 'itzg-minecraft-server', 'base_parent_123');
+
+      expect(searchedQuery).toContain("name = 'itzg-minecraft-server'");
+      expect(searchedQuery).toContain("'base_parent_123' in parents");
+      expect(createdBody).not.toBeNull();
+      expect(createdBody?.name).toBe('itzg-minecraft-server');
+      expect(createdBody?.parents).toEqual(['base_parent_123']);
+      expect(folderId).toBe('created_folder_id_789');
+
+      // Second call should return cached ID without invoking fetch again
+      const callCountBefore = (global.fetch as ReturnType<typeof vi.fn>).mock.calls.length;
+      const cachedFolderId = await getOrCreateDriveSubfolder('mock_access_token', 'itzg-minecraft-server', 'base_parent_123');
+      expect(cachedFolderId).toBe('created_folder_id_789');
+      expect((global.fetch as ReturnType<typeof vi.fn>).mock.calls.length).toBe(callCountBefore);
+    });
+
+    it('uploads backup archive into the image-related subfolder (OAuth mode)', async () => {
+      const originalFetch = global.fetch;
+      let capturedParents: string[] | undefined;
+
+      global.fetch = vi.fn().mockImplementation((url: string | URL, init?: RequestInit) => {
+        const urlStr = String(url);
+
+        if (urlStr.includes('oauth2.googleapis.com/token')) {
+          return Promise.resolve(
+            new Response(JSON.stringify({ access_token: 'mock_token_abc', expires_in: 3600 }), { status: 200 }),
+          );
+        }
+
+        if (urlStr.includes('/about')) {
+          return Promise.resolve(
+            new Response(
+              JSON.stringify({
+                user: { displayName: 'VaultRealm Tester', emailAddress: 'tester@vaultrealm.io' },
+              }),
+              { status: 200 },
+            ),
+          );
+        }
+
+        // Search for subfolder -> return existing subfolder
+        if (urlStr.includes('/files?') && init?.method !== 'POST') {
+          return Promise.resolve(
+            new Response(
+              JSON.stringify({
+                files: [{ id: 'subfolder_itzg_minecraft', name: 'itzg-minecraft-server' }],
+              }),
+              { status: 200 },
+            ),
+          );
+        }
+
+        // Upload endpoint
+        if (urlStr.includes('/upload/drive/v3/files')) {
+          const bodyStr = String(init?.body || '');
+          const match = bodyStr.match(/"parents":(\[[^\]]+\])/);
+          if (match && match[1]) {
+            capturedParents = JSON.parse(match[1]);
+          }
+          return Promise.resolve(
+            new Response(JSON.stringify({ id: 'uploaded_file_id_999', name: 'backup.tar.gz' }), { status: 200 }),
+          );
+        }
+
+        return originalFetch(url, init);
+      });
+
+      // Save OAuth configuration
+      await saveDriveConfig({
+        mode: 'oauth',
+        clientId: 'test-client-id.apps.googleusercontent.com',
+        clientSecret: 'secret_123',
+        refreshToken: 'refresh_123',
+        folderId: 'base_vaultrealm_root',
+      });
+
+      // Create a temporary backup file
+      const tempPath = path.join(getServerDataDir(serverId), 'test_backup.tar.gz');
+      fs.writeFileSync(tempPath, 'MOCK_ARCHIVE_DATA');
+
+      const result = await uploadToGoogleDrive({
+        filename: 'test_backup.tar.gz',
+        filePath: tempPath,
+        image: 'itzg/minecraft-server:latest',
+      });
+
+      expect(result.fileId).toBe('uploaded_file_id_999');
+      expect(capturedParents).toEqual(['subfolder_itzg_minecraft']);
+    });
+
+    it('passes subfolderName to Google Apps Script webhook mode', async () => {
+      const originalFetch = global.fetch;
+      let webhookPayload: Record<string, unknown> | null = null;
+
+      global.fetch = vi.fn().mockImplementation((url: string | URL, init?: RequestInit) => {
+        const urlStr = String(url);
+        if (urlStr.includes('script.google.com')) {
+          webhookPayload = JSON.parse(String(init?.body));
+          return Promise.resolve(
+            new Response(
+              JSON.stringify({ ok: true, fileId: 'webhook_file_123', folderName: 'Community' }),
+              { status: 200 },
+            ),
+          );
+        }
+        return originalFetch(url, init);
+      });
+
+      await saveDriveConfig({
+        mode: 'webhook',
+        webhookUrl: 'https://script.google.com/macros/s/AKfycb_webhook_test/exec',
+        folderId: 'base_webhook_folder',
+      });
+
+      const tempPath = path.join(getServerDataDir(serverId), 'webhook_backup.tar.gz');
+      fs.writeFileSync(tempPath, 'MOCK_WEBHOOK_BYTES');
+
+      const result = await uploadToGoogleDrive({
+        filename: 'webhook_backup.tar.gz',
+        filePath: tempPath,
+        image: 'thijsvanloef/palworld-server-docker:latest',
+      });
+
+      expect(result.fileId).toBe('webhook_file_123');
+      expect(webhookPayload).not.toBeNull();
+      expect(webhookPayload?.subfolderName).toBe('thijsvanloef-palworld-server-docker');
+      expect(webhookPayload?.folderId).toBe('base_webhook_folder');
+    });
+
+    it('on-demand upload route (uploadBackupToDrive) uses server Docker image', async () => {
+      const originalFetch = global.fetch;
+      let targetParents: string[] | undefined;
+
+      global.fetch = vi.fn().mockImplementation((url: string | URL, init?: RequestInit) => {
+        const urlStr = String(url);
+
+        if (urlStr.includes('oauth2.googleapis.com/token')) {
+          return Promise.resolve(
+            new Response(JSON.stringify({ access_token: 'mock_token_abc', expires_in: 3600 }), { status: 200 }),
+          );
+        }
+
+        if (urlStr.includes('/about')) {
+          return Promise.resolve(
+            new Response(
+              JSON.stringify({
+                user: { displayName: 'VaultRealm Admin', emailAddress: 'admin@vaultrealm.io' },
+              }),
+              { status: 200 },
+            ),
+          );
+        }
+
+        // Folder search
+        if (urlStr.includes('/files?') && init?.method !== 'POST') {
+          return Promise.resolve(
+            new Response(
+              JSON.stringify({
+                files: [{ id: 'subfolder_minecraft_java', name: 'itzg-minecraft-server' }],
+              }),
+              { status: 200 },
+            ),
+          );
+        }
+
+        if (urlStr.includes('/upload/drive/v3/files')) {
+          const bodyStr = String(init?.body || '');
+          const match = bodyStr.match(/"parents":(\[[^\]]+\])/);
+          if (match && match[1]) {
+            targetParents = JSON.parse(match[1]);
+          }
+          return Promise.resolve(
+            new Response(JSON.stringify({ id: 'file_backed_up_123', webViewLink: 'https://drive.google.com/file' }), {
+              status: 200,
+            }),
+          );
+        }
+
+        return originalFetch(url, init);
+      });
+
+      await saveDriveConfig({
+        mode: 'oauth',
+        clientId: 'client-id-test.apps.googleusercontent.com',
+        clientSecret: 'secret_abc',
+        refreshToken: 'refresh_abc',
+      });
+
+      // Create backup
+      const createRes = await app.inject({
+        method: 'POST',
+        url: `/api/servers/${serverId}/backups`,
+        cookies: { vr_session: adminCookie },
+      });
+      const backupId = createRes.json().id;
+
+      // Call on-demand drive upload
+      const uploadRes = await app.inject({
+        method: 'POST',
+        url: `/api/servers/${serverId}/backups/${backupId}/upload-drive`,
+        cookies: { vr_session: adminCookie },
+      });
+
+      expect(uploadRes.statusCode).toBe(200);
+      expect(uploadRes.json().gdriveSynced).toBe(true);
+      expect(uploadRes.json().gdriveFileId).toBe('file_backed_up_123');
+      expect(targetParents).toEqual(['subfolder_minecraft_java']);
     });
   });
 });
