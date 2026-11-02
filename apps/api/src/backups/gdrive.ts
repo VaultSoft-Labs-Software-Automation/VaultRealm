@@ -29,6 +29,8 @@ export interface GoogleDriveConfigInput {
   refreshToken?: string;
   folderId?: string;
   webhookUrl?: string;
+  accessToken?: string;
+  expiresIn?: number;
 }
 
 export interface StoredGoogleDriveConfig {
@@ -319,6 +321,8 @@ export async function exchangeAuthCode(opts: {
     clientSecret,
     refreshToken,
     folderId: opts.folderId || stored?.folderId,
+    accessToken: data.access_token,
+    expiresIn: data.expires_in,
   });
 }
 
@@ -378,12 +382,23 @@ export async function saveDriveConfig(input: GoogleDriveConfigInput): Promise<Pu
     clientSecretEnc,
     refreshTokenEnc,
     folderId: input.folderId?.trim() || existing?.folderId || undefined,
+    userEmail: existing?.userEmail,
+    userName: existing?.userName,
+    folderName: existing?.folderName,
     updatedAt: new Date().toISOString(),
   };
 
-  // Clear in-memory token cache on credential update
-  _cachedAccessToken = null;
-  _tokenExpiresAt = 0;
+  if (input.accessToken) {
+    _cachedAccessToken = input.accessToken;
+    _tokenExpiresAt = Date.now() + (input.expiresIn || 3600) * 1000;
+  } else {
+    // Clear in-memory token cache on credential update if no fresh token provided
+    _cachedAccessToken = null;
+    _tokenExpiresAt = 0;
+  }
+
+  // Save credentials first so that the user's authorization is preserved
+  saveStoredConfig(stored);
 
   // Verify connection immediately and store account info
   const test = await testGoogleDriveConnection(stored);
@@ -538,7 +553,15 @@ export async function testGoogleDriveConnection(
 
     if (!res.ok) {
       const errText = await res.text();
-      return { ok: false, error: `Drive API returned ${res.status}: ${errText}` };
+      let formattedError = `Drive API returned ${res.status}: ${errText}`;
+      if (
+        res.status === 403 &&
+        (errText.includes('Google Drive API has not been used') || errText.includes('disabled'))
+      ) {
+        formattedError =
+          'Google Drive API is disabled in your Google Cloud Project. Please enable "Google Drive API" at: https://console.cloud.google.com/apis/library/drive.googleapis.com';
+      }
+      return { ok: false, error: formattedError };
     }
 
     const data = (await res.json()) as {
