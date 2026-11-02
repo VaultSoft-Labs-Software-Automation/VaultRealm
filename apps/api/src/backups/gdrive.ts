@@ -617,8 +617,16 @@ export async function uploadToGoogleDrive(opts: {
     throw new Error('Google Drive is not configured.');
   }
 
+  const stat = await fs.promises.stat(opts.filePath);
+
   // Webhook mode
   if (config.mode === 'webhook' && config.webhookUrl) {
+    if (stat.size > 40 * 1024 * 1024) {
+      throw new Error(
+        `Backup archive size is ${(stat.size / (1024 * 1024)).toFixed(1)} MB, which exceeds Google Apps Script's 40 MB limit. Please connect using "Sign in with Google" (OAuth) for full-size game server backups.`,
+      );
+    }
+
     const fileData = await fs.promises.readFile(opts.filePath);
     const contentBase64 = fileData.toString('base64');
 
@@ -659,7 +667,6 @@ export async function uploadToGoogleDrive(opts: {
 
   // OAuth mode
   const accessToken = await getValidAccessToken();
-  const fileData = await fs.promises.readFile(opts.filePath);
 
   const metadata: Record<string, unknown> = {
     name: opts.filename,
@@ -671,6 +678,57 @@ export async function uploadToGoogleDrive(opts: {
     metadata.parents = [config.folderId];
   }
 
+  // For files > 5MB, Google Drive requires Resumable Upload to avoid 413 or timeout
+  if (stat.size > 5 * 1024 * 1024) {
+    const initRes = await fetch(
+      `${DRIVE_UPLOAD_URL}/files?uploadType=resumable&fields=id,name,webViewLink`,
+      {
+        method: 'POST',
+        headers: {
+          Authorization: `Bearer ${accessToken}`,
+          'Content-Type': 'application/json; charset=UTF-8',
+          'X-Upload-Content-Type': 'application/gzip',
+          'X-Upload-Content-Length': String(stat.size),
+        },
+        body: JSON.stringify(metadata),
+      },
+    );
+
+    if (!initRes.ok) {
+      const errText = await initRes.text();
+      throw new Error(`Google Drive resumable upload init failed (${initRes.status}): ${errText}`);
+    }
+
+    const sessionUri = initRes.headers.get('location');
+    if (!sessionUri) {
+      throw new Error('Google Drive did not return a resumable upload location URL.');
+    }
+
+    const webStream = Readable.toWeb(fs.createReadStream(opts.filePath));
+    const uploadRes = await fetch(sessionUri, {
+      method: 'PUT',
+      headers: {
+        'Content-Length': String(stat.size),
+        'Content-Type': 'application/gzip',
+      },
+      body: webStream,
+      duplex: 'half',
+    });
+
+    if (!uploadRes.ok) {
+      const errText = await uploadRes.text();
+      throw new Error(`Google Drive upload failed (${uploadRes.status}): ${errText}`);
+    }
+
+    const result = (await uploadRes.json()) as { id: string; name: string; webViewLink?: string };
+    return {
+      fileId: result.id,
+      webViewLink: result.webViewLink,
+    };
+  }
+
+  // Small files (<= 5MB): Single-roundtrip multipart upload
+  const fileData = await fs.promises.readFile(opts.filePath);
   const boundary = `-------vaultrealm_${Date.now()}`;
   const delimiter = `\r\n--${boundary}\r\n`;
   const closeDelimiter = `\r\n--${boundary}--`;
