@@ -24,6 +24,12 @@ function doPost(e) {
     if (data.folderId) {
       try { folder = DriveApp.getFolderById(data.folderId); } catch(err) {}
     }
+    if (data.subfolderName) {
+      try {
+        var subfolders = folder.getFoldersByName(data.subfolderName);
+        folder = subfolders.hasNext() ? subfolders.next() : folder.createFolder(data.subfolderName);
+      } catch(subErr) {}
+    }
     if (data.action === 'ping') {
       return ContentService.createTextOutput(JSON.stringify({
         ok: true,

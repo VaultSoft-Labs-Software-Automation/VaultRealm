@@ -59,6 +59,10 @@ export class RealDockerDriver implements DockerDriver {
           MaximumRetryCount: opts.restartPolicy === 'on-failure' ? 3 : 0,
         },
         NetworkMode: opts.networkMode,
+        ExtraHosts:
+          opts.extraHosts && opts.extraHosts.length > 0
+            ? Array.from(new Set([...opts.extraHosts, 'host.docker.internal:host-gateway']))
+            : ['host.docker.internal:host-gateway'],
         ReadonlyRootfs: opts.readOnly ?? false,
         CapDrop: opts.capDrop,
         CapAdd: opts.capAdd,
@@ -131,6 +135,18 @@ export class RealDockerDriver implements DockerDriver {
       },
       networkSettings: {
         ports: data.NetworkSettings.Ports ?? {},
+        ipAddress:
+          data.NetworkSettings.IPAddress ||
+          (data.NetworkSettings.Networks
+            ? Object.values(data.NetworkSettings.Networks as Record<string, { IPAddress?: string }>)[0]?.IPAddress
+            : undefined) ||
+          undefined,
+        gateway:
+          data.NetworkSettings.Gateway ||
+          (data.NetworkSettings.Networks
+            ? Object.values(data.NetworkSettings.Networks as Record<string, { Gateway?: string }>)[0]?.Gateway
+            : undefined) ||
+          undefined,
       },
       mounts: (data.Mounts ?? []).map(
         // eslint-disable-next-line @typescript-eslint/no-explicit-any -- dockerode mount type

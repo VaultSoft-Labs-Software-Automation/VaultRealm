@@ -77,6 +77,16 @@ export interface GoogleDriveTestResult {
 let _cachedAccessToken: string | null = null;
 let _tokenExpiresAt = 0;
 
+// In-memory folder ID cache for Google Drive folders (key: `${parentFolderId || 'root'}:${folderName}`)
+const _folderIdCache = new Map<string, string>();
+
+/**
+ * Clear in-memory folder ID cache (useful for tests and credential resets).
+ */
+export function clearDriveFolderCache(): void {
+  _folderIdCache.clear();
+}
+
 /**
  * Retrieve raw stored Google Drive configuration from database.
  */
@@ -441,6 +451,7 @@ export function deleteDriveConfig(): void {
   db.delete(systemSettings).where(eq(systemSettings.key, SETTINGS_KEY)).run();
   _cachedAccessToken = null;
   _tokenExpiresAt = 0;
+  _folderIdCache.clear();
 }
 
 /**
@@ -605,19 +616,139 @@ export async function testGoogleDriveConnection(
 }
 
 /**
- * Upload a file to Google Drive using multipart upload (OAuth) or Webhook.
+ * Sanitize and format a Docker image name or template ID into a clean Google Drive folder name.
+ * e.g. "itzg/minecraft-server:latest" -> "itzg-minecraft-server"
+ * e.g. "thijsvanloef/palworld-server-docker:latest" -> "thijsvanloef-palworld-server-docker"
+ * e.g. "ghcr.io/owner/repo:1.0" -> "owner-repo"
  */
-export async function uploadToGoogleDrive(opts: {
+export function getDockerImageFolderName(imageOrTemplate: string): string {
+  if (!imageOrTemplate || !imageOrTemplate.trim()) {
+    return 'default';
+  }
+  let str = imageOrTemplate.trim();
+  // Strip sha256 digest: @sha256:...
+  str = str.split('@')[0]!;
+  // Strip registry prefix if it looks like a domain name with dot or port (e.g. ghcr.io/, docker.io/, localhost:5000/)
+  str = str.replace(/^[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}(:\d+)?\//, '');
+  str = str.replace(/^localhost(:\d+)?\//, '');
+  // Strip tag (e.g. :latest, :1.20.4) - only after the last slash if there are slashes
+  const lastColonIndex = str.lastIndexOf(':');
+  const lastSlashIndex = str.lastIndexOf('/');
+  if (lastColonIndex > lastSlashIndex) {
+    str = str.substring(0, lastColonIndex);
+  }
+  // Replace slashes and any invalid folder characters with hyphens
+  str = str.replace(/[/:\\*?"<>|]+/g, '-').replace(/^-+|-+$/g, '');
+  return str.toLowerCase() || 'default';
+}
+
+/**
+ * Look up or create a Google Drive subfolder by name within a parent folder (or Drive root).
+ */
+export async function getOrCreateDriveSubfolder(
+  accessToken: string,
+  subfolderName: string,
+  parentFolderId?: string,
+): Promise<string> {
+  const cleanParent = parentFolderId?.trim();
+  const cacheKey = `${cleanParent || 'root'}:${subfolderName}`;
+  const cached = _folderIdCache.get(cacheKey);
+  if (cached) {
+    return cached;
+  }
+
+  try {
+    return await resolveOrCreateFolder(accessToken, subfolderName, cleanParent);
+  } catch (err) {
+    if (cleanParent && cleanParent !== 'root') {
+      console.warn(`[gdrive] Failed to resolve subfolder in parent ${cleanParent}, falling back to root:`, err);
+      return await resolveOrCreateFolder(accessToken, subfolderName, undefined);
+    }
+    throw err;
+  }
+}
+
+async function resolveOrCreateFolder(
+  accessToken: string,
+  folderName: string,
+  parentFolderId?: string,
+): Promise<string> {
+  const cacheKey = `${parentFolderId || 'root'}:${folderName}`;
+  const parentQuery = parentFolderId ? `'${parentFolderId}' in parents` : `'root' in parents`;
+  const escapedName = folderName.replace(/\\/g, '\\\\').replace(/'/g, "\\'");
+  const q = `mimeType = 'application/vnd.google-apps.folder' and trashed = false and name = '${escapedName}' and ${parentQuery}`;
+
+  const searchUrl = `${DRIVE_API_URL}/files?q=${encodeURIComponent(q)}&fields=files(id,name)&spaces=drive&supportsAllDrives=true&includeItemsFromAllDrives=true`;
+  const searchRes = await fetch(searchUrl, {
+    headers: { Authorization: `Bearer ${accessToken}` },
+  });
+
+  if (!searchRes.ok) {
+    const errText = await searchRes.text();
+    throw new Error(`Google Drive folder search failed (${searchRes.status}): ${errText}`);
+  }
+
+  const searchData = (await searchRes.json()) as { files?: Array<{ id: string; name: string }> };
+  if (searchData.files && searchData.files.length > 0 && searchData.files[0]?.id) {
+    const foundId = searchData.files[0].id;
+    _folderIdCache.set(cacheKey, foundId);
+    return foundId;
+  }
+
+  // Not found — create folder
+  const folderMetadata: Record<string, unknown> = {
+    name: folderName,
+    mimeType: 'application/vnd.google-apps.folder',
+  };
+  if (parentFolderId) {
+    folderMetadata.parents = [parentFolderId];
+  }
+
+  const createRes = await fetch(`${DRIVE_API_URL}/files?supportsAllDrives=true&fields=id,name`, {
+    method: 'POST',
+    headers: {
+      Authorization: `Bearer ${accessToken}`,
+      'Content-Type': 'application/json; charset=UTF-8',
+    },
+    body: JSON.stringify(folderMetadata),
+  });
+
+  if (!createRes.ok) {
+    const errText = await createRes.text();
+    throw new Error(`Google Drive folder creation failed (${createRes.status}): ${errText}`);
+  }
+
+  const createdData = (await createRes.json()) as { id: string; name: string };
+  _folderIdCache.set(cacheKey, createdData.id);
+  return createdData.id;
+}
+
+export interface UploadToGoogleDriveOptions {
   filename: string;
   filePath: string;
   description?: string;
-}): Promise<{ fileId: string; webViewLink?: string }> {
+  image?: string;
+  folderName?: string;
+  subfolderName?: string;
+}
+
+/**
+ * Upload a file to Google Drive using multipart upload (OAuth) or Webhook.
+ * Files are placed inside a folder related to the server Docker image.
+ */
+export async function uploadToGoogleDrive(
+  opts: UploadToGoogleDriveOptions,
+): Promise<{ fileId: string; webViewLink?: string }> {
   const config = getStoredDriveConfig();
   if (!config) {
     throw new Error('Google Drive is not configured.');
   }
 
   const stat = await fs.promises.stat(opts.filePath);
+  const targetSubfolderName =
+    opts.subfolderName?.trim() ||
+    opts.folderName?.trim() ||
+    (opts.image ? getDockerImageFolderName(opts.image) : undefined);
 
   // Webhook mode
   if (config.mode === 'webhook' && config.webhookUrl) {
@@ -638,6 +769,7 @@ export async function uploadToGoogleDrive(opts: {
         filename: opts.filename,
         description: opts.description || 'VaultRealm Server Backup',
         folderId: config.folderId,
+        subfolderName: targetSubfolderName,
         contentBase64,
       }),
       redirect: 'follow',
@@ -668,14 +800,23 @@ export async function uploadToGoogleDrive(opts: {
   // OAuth mode
   const accessToken = await getValidAccessToken();
 
+  let targetFolderId = config.folderId;
+  if (targetSubfolderName) {
+    try {
+      targetFolderId = await getOrCreateDriveSubfolder(accessToken, targetSubfolderName, config.folderId);
+    } catch (err) {
+      console.warn(`[gdrive] Could not resolve subfolder "${targetSubfolderName}", falling back to base folder:`, err);
+    }
+  }
+
   const metadata: Record<string, unknown> = {
     name: opts.filename,
     description: opts.description || 'VaultRealm Server Backup',
     mimeType: 'application/gzip',
   };
 
-  if (config.folderId) {
-    metadata.parents = [config.folderId];
+  if (targetFolderId) {
+    metadata.parents = [targetFolderId];
   }
 
   // For files > 5MB, Google Drive requires Resumable Upload to avoid 413 or timeout
