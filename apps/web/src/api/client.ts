@@ -700,6 +700,7 @@ export interface LlmEndpoint {
   defaultModel: string | null;
   lastFour: string | null;
   hasKey: boolean;
+  keyDecryptionFailed?: boolean;
   supportsTools: boolean;
   timeoutS: number;
   createdAt: string;

@@ -261,7 +261,10 @@ export class CompanionBotRunner {
         },
       });
     } catch (err: unknown) {
-      const errMsg = err instanceof Error ? err.message : 'Error communicating with AI gateway';
+      let errMsg = err instanceof Error ? err.message : 'Error communicating with AI gateway';
+      if (errMsg.includes('Could not decrypt API key') || errMsg.includes('KEY_DECRYPT_ERROR')) {
+        errMsg = 'My API key could not be decrypted. Please re-enter the API key in the Companion settings.';
+      }
       console.error('[BotRunner] Agent loop error:', errMsg);
       this.bot.chat(`[${this.config.botName}] Sorry, I encountered an error: ${errMsg}`);
     }
