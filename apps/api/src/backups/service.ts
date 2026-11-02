@@ -16,6 +16,7 @@ import { getConfig } from '../config.js';
 import { getServerDataDir } from '../servers/volume.js';
 import { getDockerDriver } from '../servers/service.js';
 import { executeServerCommand } from '../servers/console.js';
+import { getTemplate } from '../servers/templates.js';
 import { writeAudit } from '../audit/log.js';
 import {
   uploadToGoogleDrive,
@@ -127,25 +128,7 @@ export async function createServerBackup(
   const stat = await fs.promises.stat(backupPath);
   const now = new Date().toISOString();
 
-  let gdriveFileId: string | null = null;
-  let gdriveWebLink: string | null = null;
-
-  // Cloud offload to Google Drive if requested or if auto-cloud is configured
-  if (opts.uploadToDrive) {
-    try {
-      const gdrive = await uploadToGoogleDrive({
-        filename,
-        filePath: backupPath,
-        description: `VaultRealm Backup: ${server.name} (${backupId})`,
-      });
-      gdriveFileId = gdrive.fileId;
-      gdriveWebLink = gdrive.webViewLink || null;
-    } catch (err) {
-      console.warn(`[backups] Google Drive upload failed for ${backupId}:`, err);
-      // We still preserve the local backup even if cloud upload failed
-    }
-  }
-
+  // 1. Save local backup record immediately to guarantee persistence and prevent proxy timeouts
   db.insert(backups)
     .values({
       id: backupId,
@@ -155,8 +138,8 @@ export async function createServerBackup(
       path: backupPath,
       kind: 'manual',
       name: opts.name || null,
-      gdriveFileId,
-      gdriveWebLink,
+      gdriveFileId: null,
+      gdriveWebLink: null,
     })
     .run();
 
@@ -165,8 +148,47 @@ export async function createServerBackup(
     action: 'server.backup.create',
     target: serverId,
     ip,
-    data: { backupId, sizeBytes: stat.size, gdriveSynced: !!gdriveFileId },
+    data: { backupId, sizeBytes: stat.size, gdriveRequested: !!opts.uploadToDrive },
   });
+
+  // 2. Offload to Google Drive in the background if requested so the HTTP request completes immediately
+  if (opts.uploadToDrive) {
+    void (async () => {
+      try {
+        const template = getTemplate(server.templateId);
+        let dockerImage = template?.image;
+        if (!dockerImage && server.containerId) {
+          try {
+            const driver = getDockerDriver();
+            const info = await driver.inspectContainer(server.containerId);
+            dockerImage = info.image;
+          } catch {
+            // ignore
+          }
+        }
+        if (!dockerImage) {
+          dockerImage = server.templateId;
+        }
+
+        const gdrive = await uploadToGoogleDrive({
+          filename,
+          filePath: backupPath,
+          description: `VaultRealm Backup: ${server.name} (${backupId})`,
+          image: dockerImage,
+        });
+        db.update(backups)
+          .set({
+            gdriveFileId: gdrive.fileId,
+            gdriveWebLink: gdrive.webViewLink || null,
+          })
+          .where(eq(backups.id, backupId))
+          .run();
+        console.log(`[backups] Background Google Drive upload succeeded for ${backupId}`);
+      } catch (err) {
+        console.warn(`[backups] Background Google Drive upload failed for ${backupId}:`, err);
+      }
+    })();
+  }
 
   return {
     id: backupId,
@@ -176,10 +198,10 @@ export async function createServerBackup(
     sizeBytes: stat.size,
     path: backupPath,
     kind: 'manual',
-    gdriveFileId,
-    gdriveWebLink,
+    gdriveFileId: null,
+    gdriveWebLink: null,
     localExists: true,
-    gdriveSynced: !!gdriveFileId,
+    gdriveSynced: false,
   };
 }
 
@@ -343,10 +365,26 @@ export async function uploadBackupToDrive(
   }
 
   const server = db.select().from(servers).where(eq(servers.id, serverId)).all()[0];
+  const template = server ? getTemplate(server.templateId) : undefined;
+  let dockerImage = template?.image;
+  if (!dockerImage && server?.containerId) {
+    try {
+      const driver = getDockerDriver();
+      const info = await driver.inspectContainer(server.containerId);
+      dockerImage = info.image;
+    } catch {
+      // ignore
+    }
+  }
+  if (!dockerImage) {
+    dockerImage = server?.templateId || 'server';
+  }
+
   const gdrive = await uploadToGoogleDrive({
     filename: path.basename(backup.path),
     filePath: backup.path,
     description: `VaultRealm Backup: ${server?.name || serverId} (${backupId})`,
+    image: dockerImage,
   });
 
   db.update(backups)
@@ -429,6 +467,7 @@ export async function createFullSystemBackup(
         filename,
         filePath: backupPath,
         description: 'VaultRealm Full Panel System Disaster Recovery Backup',
+        image: 'vaultrealm-system',
       });
       gdriveFileId = gdrive.fileId;
       gdriveWebLink = gdrive.webViewLink;

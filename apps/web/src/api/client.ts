@@ -700,6 +700,7 @@ export interface LlmEndpoint {
   defaultModel: string | null;
   lastFour: string | null;
   hasKey: boolean;
+  keyDecryptionFailed?: boolean;
   supportsTools: boolean;
   timeoutS: number;
   createdAt: string;
@@ -728,6 +729,8 @@ export interface BotDetail {
   mode: 'off' | 'manual' | 'auto-solo' | 'always';
   authMode: 'offline' | 'microsoft' | 'proxy';
   whoCanCommand: string;
+  ownerPlayerName?: string;
+  trustedPlayers?: string[];
   proactive: boolean;
   dailyTokenBudget: number;
   rpmLimit: number;
@@ -747,6 +750,8 @@ export interface BotConfigInput {
   mode?: 'off' | 'manual' | 'auto-solo' | 'always';
   authMode?: 'offline' | 'microsoft' | 'proxy';
   whoCanCommand?: string;
+  ownerPlayerName?: string;
+  trustedPlayers?: string[];
   dailyTokenBudget?: number;
   rpmLimit?: number;
   proactive?: boolean;

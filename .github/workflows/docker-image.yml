@@ -1,12 +1,15 @@
 name: Publish Docker images to Docker Hub
 
 # Triggers:
-#   push to master  -> :edge
+#   push to master  -> :latest
+#   push to edge    -> :edge
 #   git tag v*      -> :0.1.7, :0.1, and :latest
 #   manual dispatch -> on-demand publishing
 on:
   push:
-    branches: [master]
+    branches:
+      - master
+      - edge
     tags:
       - "v*"
       - "v*.*.*"
@@ -54,16 +57,16 @@ jobs:
           flavor: |
             latest=false
           tags: |
-            # Master branch builds get :edge
-            type=edge,branch=master
+            # Edge branch builds get :edge
+            type=edge,branch=edge
+            # Master branch builds get :latest
+            type=raw,value=latest,enable=${{ github.ref == 'refs/heads/master' || startsWith(github.ref, 'refs/tags/v') }}
             # Release tag: exact semver (e.g. 0.1.7)
             type=semver,pattern={{version}}
             # Release tag: minor version track (e.g. 0.1)
             type=semver,pattern={{major}}.{{minor}}
             # Release tag: major version only for stable v1+ (e.g. 1, 2)
             type=semver,pattern={{major}},enable=${{ !startsWith(github.ref, 'refs/tags/v0.') }}
-            # Release tag: update latest
-            type=raw,value=latest,enable=${{ startsWith(github.ref, 'refs/tags/v') }}
           labels: |
             org.opencontainers.image.title=VaultRealm
             org.opencontainers.image.description=A lightweight, modern, multi-user control panel for self-hosting game servers
@@ -138,16 +141,16 @@ jobs:
           flavor: |
             latest=false
           tags: |
-            # Master branch builds get :edge
-            type=edge,branch=master
+            # Edge branch builds get :edge
+            type=edge,branch=edge
+            # Master branch builds get :latest
+            type=raw,value=latest,enable=${{ github.ref == 'refs/heads/master' || startsWith(github.ref, 'refs/tags/v') }}
             # Release tag: exact semver (e.g. 0.1.7)
             type=semver,pattern={{version}}
             # Release tag: minor version track (e.g. 0.1)
             type=semver,pattern={{major}}.{{minor}}
             # Release tag: major version only for stable v1+ (e.g. 1, 2)
             type=semver,pattern={{major}},enable=${{ !startsWith(github.ref, 'refs/tags/v0.') }}
-            # Release tag: update latest
-            type=raw,value=latest,enable=${{ startsWith(github.ref, 'refs/tags/v') }}
           labels: |
             org.opencontainers.image.title=VaultRealm Bot Runner
             org.opencontainers.image.description=Autonomous AI Companion Bot Runner for Minecraft servers in VaultRealm

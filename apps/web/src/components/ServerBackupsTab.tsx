@@ -87,7 +87,7 @@ export function ServerBackupsTab({
     e.preventDefault();
     setCreating(true);
     try {
-      const backup = await api.createServerBackup(serverId, {
+      await api.createServerBackup(serverId, {
         name: backupName.trim() || undefined,
         uploadToDrive,
       });
@@ -95,13 +95,17 @@ export function ServerBackupsTab({
       addToast({
         type: 'success',
         title: 'Backup created successfully!',
-        message: uploadToDrive && backup.gdriveFileId
-          ? 'Compressed and synced to your Google Drive.'
+        message: uploadToDrive
+          ? 'Backup snapshot saved! Uploading to Google Drive in the background...'
           : 'Archive saved locally.',
       });
 
       setShowCreateModal(false);
       await loadData();
+      if (uploadToDrive) {
+        setTimeout(() => void loadData(), 5000);
+        setTimeout(() => void loadData(), 12000);
+      }
     } catch (err) {
       const error = err as ApiError;
       addToast({

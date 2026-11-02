@@ -17,6 +17,7 @@ export interface ContainerCreateOptions {
   pidsLimit?: number;
   restartPolicy?: 'no' | 'unless-stopped' | 'on-failure';
   networkMode?: string;
+  extraHosts?: string[];
   readOnly?: boolean;
   capDrop?: string[];
   capAdd?: string[];
@@ -75,6 +76,8 @@ export interface ContainerInspect {
   };
   networkSettings: {
     ports: Record<string, Array<{ HostPort: string }> | null>;
+    ipAddress?: string;
+    gateway?: string;
   };
   mounts: Array<{
     source: string;

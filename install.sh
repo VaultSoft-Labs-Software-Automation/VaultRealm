@@ -188,9 +188,15 @@ setup_filesystem() {
   chmod 755 "${DATA_DIR}"
 
   if [ ! -f "${ENV_FILE}" ]; then
+    local GENERATED_SECRET
+    GENERATED_SECRET="$(head -c 32 /dev/urandom 2>/dev/null | base64 | tr -dc 'a-zA-Z0-9' | head -c 32)"
+    if [ -z "${GENERATED_SECRET}" ] || [ ${#GENERATED_SECRET} -lt 16 ]; then
+      GENERATED_SECRET="$(date +%s%N | sha256sum | head -c 32)"
+    fi
     cat <<EOF > "${ENV_FILE}"
 # VaultRealm Runtime Environment Configuration
 PORT=${PANEL_PORT}
+PANEL_SECRET=${GENERATED_SECRET}
 DATA_DIR=/srv/vaultrealm/data
 NODE_ENV=production
 LOG_LEVEL=info
@@ -201,6 +207,15 @@ EOF
   else
     # Update PORT in existing env file
     sed -i "s/^PORT=.*/PORT=${PANEL_PORT}/" "${ENV_FILE}"
+    # Ensure persistent PANEL_SECRET is present in existing env file so encryption keys stay valid across restarts
+    if ! grep -qE '^PANEL_SECRET=' "${ENV_FILE}"; then
+      local GENERATED_SECRET
+      GENERATED_SECRET="$(head -c 32 /dev/urandom 2>/dev/null | base64 | tr -dc 'a-zA-Z0-9' | head -c 32)"
+      if [ -z "${GENERATED_SECRET}" ] || [ ${#GENERATED_SECRET} -lt 16 ]; then
+        GENERATED_SECRET="$(date +%s%N | sha256sum | head -c 32)"
+      fi
+      echo "PANEL_SECRET=${GENERATED_SECRET}" >> "${ENV_FILE}"
+    fi
   fi
   chmod 600 "${ENV_FILE}"
 }

@@ -25,6 +25,8 @@ import {
   type EntitySummary,
   type BlockSummary,
 } from './perception.js';
+import { resolveTargetHost } from './dns-fallback.js';
+import { getPlayerRole, canPlayerExecuteSkill } from './permissions.js';
 
 export class CompanionBotRunner {
   private config: BotConfig;
@@ -71,14 +73,23 @@ export class CompanionBotRunner {
     console.log(`[BotRunner] Bot "${this.config.botName}" stopped.`);
   }
 
-  private connect(): void {
+  private async connect(): Promise<void> {
+    if (!this.isRunning) return;
+
+    let targetHost = this.config.serverHost;
+    try {
+      targetHost = await resolveTargetHost(this.config.serverHost);
+    } catch (err) {
+      console.warn(`[BotRunner] Error resolving target host "${this.config.serverHost}":`, err);
+    }
+
     console.log(
-      `[BotRunner] Connecting to ${this.config.serverHost}:${this.config.serverPort} as "${this.config.botName}" (auth: ${this.config.authMode})...`,
+      `[BotRunner] Connecting to ${targetHost}:${this.config.serverPort} as "${this.config.botName}" (auth: ${this.config.authMode})...`,
     );
 
     try {
       this.bot = mineflayer.createBot({
-        host: this.config.serverHost,
+        host: targetHost,
         port: this.config.serverPort,
         username: this.config.botName,
         auth: this.config.authMode === 'offline' ? 'offline' : 'microsoft',
@@ -93,6 +104,10 @@ export class CompanionBotRunner {
   }
 
   private setupEventHandlers(bot: mineflayer.Bot): void {
+    bot.on('error', (err: Error) => {
+      console.error(`[BotRunner] Connection error: ${err.message}`);
+    });
+
     bot.on('spawn', async () => {
       console.log(`[BotRunner] "${this.config.botName}" successfully spawned into the game!`);
 
@@ -206,9 +221,36 @@ export class CompanionBotRunner {
     const statusSnapshot = this.getStatusSnapshot();
     const fastCmd = handleFastCommand(content, this.config.botName, statusSnapshot);
     if (fastCmd.isFastCommand) {
+      if (fastCmd.command && fastCmd.command !== 'help') {
+        const role = getPlayerRole(
+          username,
+          this.config.ownerName ?? 'admin',
+          this.config.trustedPlayers ?? [],
+        );
+        const policy = this.config.whoCanCommand ?? 'everyone';
+        const auth = canPlayerExecuteSkill(role, policy, fastCmd.command);
+        if (!auth.allowed) {
+          this.bot.chat(`[${this.config.botName}] ${auth.reason || 'Sorry, you do not have permission to use that command.'}`);
+          return;
+        }
+      }
+
+      this.executor.updateContext({
+        speaker: username,
+        protectedZones: this.config.protectedZones,
+        savedPlaces: this.config.savedPlaces,
+      });
+
       if (fastCmd.command === 'stop') {
         this.executor.abortCurrent();
+      } else if (fastCmd.command === 'come') {
+        void this.executor.come();
+      } else if (fastCmd.command === 'follow') {
+        void this.executor.follow(username);
+      } else if (fastCmd.command === 'stay') {
+        void this.executor.stay();
       }
+
       if (fastCmd.reply) {
         this.bot.chat(fastCmd.reply);
       }
@@ -247,7 +289,10 @@ export class CompanionBotRunner {
         },
       });
     } catch (err: unknown) {
-      const errMsg = err instanceof Error ? err.message : 'Error communicating with AI gateway';
+      let errMsg = err instanceof Error ? err.message : 'Error communicating with AI gateway';
+      if (errMsg.includes('Could not decrypt API key') || errMsg.includes('KEY_DECRYPT_ERROR')) {
+        errMsg = 'My API key could not be decrypted. Please re-enter the API key in the Companion settings.';
+      }
       console.error('[BotRunner] Agent loop error:', errMsg);
       this.bot.chat(`[${this.config.botName}] Sorry, I encountered an error: ${errMsg}`);
     }

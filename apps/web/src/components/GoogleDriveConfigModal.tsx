@@ -24,6 +24,12 @@ function doPost(e) {
     if (data.folderId) {
       try { folder = DriveApp.getFolderById(data.folderId); } catch(err) {}
     }
+    if (data.subfolderName) {
+      try {
+        var subfolders = folder.getFoldersByName(data.subfolderName);
+        folder = subfolders.hasNext() ? subfolders.next() : folder.createFolder(data.subfolderName);
+      } catch(subErr) {}
+    }
     if (data.action === 'ping') {
       return ContentService.createTextOutput(JSON.stringify({
         ok: true,
@@ -791,10 +797,13 @@ export function GoogleDriveConfigModal({ open, onClose, onSaved }: GoogleDriveCo
               <div className="p-4 rounded-xl bg-blue-500/10 border border-blue-500/30 text-xs space-y-2">
                 <div className="flex items-center gap-2 font-bold text-blue-300">
                   <span>💡</span>
-                  <span>Easiest Method for Non-Technical Users</span>
+                  <span>Zero-Cloud Method (Google Apps Script)</span>
                 </div>
                 <p className="text-zinc-300 leading-relaxed">
                   No Google Cloud account or API keys required! Any personal or school Google Drive account can receive backups in 60 seconds using a simple Google Apps Script Web App.
+                </p>
+                <p className="text-[11px] text-amber-300/90 leading-relaxed">
+                  <strong>Notice:</strong> Google Apps Script enforces a 40 MB payload limit per file. For large game servers (100 MB+ world or modpacks), please use the <strong>Sign in with Google</strong> (OAuth) tab which supports multi-gigabyte uploads.
                 </p>
               </div>
 
