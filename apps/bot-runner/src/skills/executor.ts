@@ -28,6 +28,29 @@ export interface SkillResult {
   message: string;
 }
 
+interface PathfinderGoalsModule {
+  GoalFollow?: new (entity: unknown, distance: number) => unknown;
+  GoalNear?: new (x: number, y: number, z: number, range: number) => unknown;
+}
+
+/**
+ * Safely resolves mineflayer-pathfinder goals across ESM/CJS interop boundaries.
+ */
+async function loadPathfinderGoals(): Promise<PathfinderGoalsModule | null> {
+  try {
+    const mod = await import('mineflayer-pathfinder');
+    const pf = mod as unknown as { default?: { goals?: unknown }; goals?: unknown };
+    const rawGoals = pf.goals ?? pf.default?.goals;
+    if (rawGoals && typeof rawGoals === 'object') {
+      return rawGoals as PathfinderGoalsModule;
+    }
+    return null;
+  } catch (err) {
+    console.warn('[SkillExecutor] Could not load mineflayer-pathfinder module:', err);
+    return null;
+  }
+}
+
 export class SkillExecutor {
   private ctx: SkillExecutionContext;
   private currentAbortController: AbortController | null = null;
@@ -148,15 +171,15 @@ export class SkillExecutor {
     }
 
     try {
-      const pathfinder = (this.ctx.bot as unknown as { pathfinder?: { setGoal: (g: unknown, d: boolean) => void } }).pathfinder;
+      const pathfinder = (this.ctx.bot as unknown as { pathfinder?: { setGoal: (g: unknown, d?: boolean) => void } }).pathfinder;
       if (pathfinder) {
-        // Dynamic import or require pathfinder goals if available
-        // eslint-disable-next-line @typescript-eslint/no-require-imports
-        const { goals } = await import('mineflayer-pathfinder');
-        const goal = new goals.GoalFollow(player.entity, distance);
-        pathfinder.setGoal(goal, true);
-        this.ctx.onTaskChange?.(`Following ${targetPlayerName}`);
-        return { success: true, message: `Now following ${targetPlayerName} at distance ${distance}m.` };
+        const goals = await loadPathfinderGoals();
+        if (goals?.GoalFollow) {
+          const goal = new goals.GoalFollow(player.entity, distance);
+          pathfinder.setGoal(goal, true);
+          this.ctx.onTaskChange?.(`Following ${targetPlayerName}`);
+          return { success: true, message: `Now following ${targetPlayerName} at distance ${distance}m.` };
+        }
       }
     } catch (err) {
       console.warn('[SkillExecutor] Pathfinder follow fallback:', err);
@@ -201,14 +224,16 @@ export class SkillExecutor {
     try {
       const pathfinder = (this.ctx.bot as unknown as { pathfinder?: { setGoal: (g: unknown) => void } }).pathfinder;
       if (pathfinder) {
-        const { goals } = await import('mineflayer-pathfinder');
-        const goal = new goals.GoalNear(targetVec.x, targetVec.y, targetVec.z, 2);
-        pathfinder.setGoal(goal);
-        this.ctx.onTaskChange?.(`Moving to ${desc}`);
-        return { success: true, message: `Navigating to ${desc}.` };
+        const goals = await loadPathfinderGoals();
+        if (goals?.GoalNear) {
+          const goal = new goals.GoalNear(targetVec.x, targetVec.y, targetVec.z, 2);
+          pathfinder.setGoal(goal);
+          this.ctx.onTaskChange?.(`Moving to ${desc}`);
+          return { success: true, message: `Navigating to ${desc}.` };
+        }
       }
-    } catch {
-      // fallback
+    } catch (err) {
+      console.warn('[SkillExecutor] Pathfinder goTo fallback:', err);
     }
 
     return { success: true, message: `Moving towards ${desc}.` };
