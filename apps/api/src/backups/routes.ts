@@ -297,45 +297,58 @@ export async function backupRoutes(app: FastifyInstance): Promise<void> {
       reply.type('text/html; charset=utf-8');
 
       if (error || !code) {
+        const isAccessDenied = error === 'access_denied';
         return reply.send(`
           <!DOCTYPE html>
           <html lang="en">
           <head>
             <meta charset="utf-8">
-            <title>Google Sign-In Cancelled</title>
+            <title>Google Sign-In ${isAccessDenied ? 'Access Blocked' : 'Cancelled'}</title>
           </head>
-          <body style="font-family:sans-serif;background:#0f172a;color:#f8fafc;display:flex;align-items:center;justify-content:center;height:100vh;margin:0;">
-            <div style="text-align:center;padding:2rem;background:#1e293b;border-radius:1rem;border:1px solid #ef4444;max-width:440px;">
+          <body style="font-family:sans-serif;background:#0f172a;color:#f8fafc;display:flex;align-items:center;justify-content:center;height:100vh;margin:0;padding:1rem;">
+            <div style="text-align:center;padding:2rem;background:#1e293b;border-radius:1rem;border:1px solid #ef4444;max-width:500px;box-shadow:0 25px 50px -12px rgba(0,0,0,0.5);">
               <div style="font-size:3rem;margin-bottom:1rem;">❌</div>
-              <h2 style="margin:0 0 0.5rem 0;color:#ef4444;">Google Sign-In Cancelled</h2>
-              <p style="color:#94a3b8;font-size:0.875rem;">${error || 'Authorization code was not provided.'}</p>
-              <button onclick="window.close()" style="margin-top:1rem;padding:0.5rem 1.25rem;background:#334155;color:#fff;border:none;border-radius:0.5rem;cursor:pointer;">Close Window</button>
+              <h2 style="margin:0 0 0.5rem 0;color:#ef4444;">Google Sign-In ${isAccessDenied ? 'Access Blocked' : 'Cancelled'}</h2>
+              <p style="color:#94a3b8;font-size:0.875rem;margin-bottom:1rem;">${error || 'Authorization code was not provided.'}</p>
+              ${
+                isAccessDenied
+                  ? `<div style="text-align:left;background:#0f172a;padding:1rem;border-radius:0.5rem;font-size:0.8rem;color:#cbd5e1;margin-bottom:1rem;line-height:1.5;border:1px solid #334155;">
+                      <strong style="color:#fbbf24;">Why this happens:</strong><br>
+                      If your Google Cloud OAuth App is in <strong>"Testing"</strong> publishing status, only accounts explicitly added to <strong>Test users</strong> are permitted to sign in.<br><br>
+                      <strong style="color:#10b981;">How to fix:</strong><br>
+                      1. Go to <a href="https://console.cloud.google.com/apis/credentials/consent" target="_blank" style="color:#60a5fa;text-decoration:underline;">Google Cloud Console &rarr; OAuth consent screen &rarr; Test users</a>.<br>
+                      2. Click <strong>+ ADD USERS</strong> and enter your Google account email.<br>
+                      3. Click <strong>Save</strong> and try signing in again.
+                    </div>`
+                  : ''
+              }
+              <button onclick="window.close()" style="margin-top:0.5rem;padding:0.5rem 1.25rem;background:#334155;color:#fff;border:none;border-radius:0.5rem;cursor:pointer;font-weight:600;">Close Window</button>
             </div>
           </body>
           </html>
         `);
       }
 
-      try {
-        // Decode redirectUri from state if present to guarantee exact match behind reverse proxy
-        let redirectUri: string | undefined;
-        if (state) {
-          try {
-            const decoded = JSON.parse(Buffer.from(state, 'base64url').toString('utf8'));
-            if (decoded && typeof decoded.redirectUri === 'string') {
-              redirectUri = decoded.redirectUri;
-            }
-          } catch {
-            // fallback if state was not base64url JSON
+      // Decode redirectUri from state if present to guarantee exact match behind reverse proxy
+      let redirectUri: string | undefined;
+      if (state) {
+        try {
+          const decoded = JSON.parse(Buffer.from(state, 'base64url').toString('utf8'));
+          if (decoded && typeof decoded.redirectUri === 'string') {
+            redirectUri = decoded.redirectUri;
           }
+        } catch {
+          // fallback if state was not base64url JSON
         }
+      }
 
-        if (!redirectUri) {
-          const protocol = request.protocol || 'http';
-          const host = request.headers.host || 'localhost:3001';
-          redirectUri = `${protocol}://${host}/api/system/google-drive/callback`;
-        }
+      if (!redirectUri) {
+        const protocol = request.protocol || 'http';
+        const host = request.headers.host || 'localhost:3001';
+        redirectUri = `${protocol}://${host}/api/system/google-drive/callback`;
+      }
 
+      try {
         const config = await exchangeAuthCode({ code, redirectUri });
 
         return reply.send(`
@@ -368,6 +381,9 @@ export async function backupRoutes(app: FastifyInstance): Promise<void> {
           </html>
         `);
       } catch (err) {
+        const errMsg = err instanceof Error ? err.message : String(err);
+        const isDriveApiDisabled = errMsg.includes('Google Drive API is disabled') || errMsg.includes('disabled');
+        const isRedirectUriMismatch = errMsg.includes('redirect_uri_mismatch');
         return reply.send(`
           <!DOCTYPE html>
           <html lang="en">
@@ -375,12 +391,35 @@ export async function backupRoutes(app: FastifyInstance): Promise<void> {
             <meta charset="utf-8">
             <title>Connection Failed</title>
           </head>
-          <body style="font-family:sans-serif;background:#0f172a;color:#f8fafc;display:flex;align-items:center;justify-content:center;height:100vh;margin:0;">
-            <div style="text-align:center;padding:2rem;background:#1e293b;border-radius:1rem;border:1px solid #ef4444;max-width:440px;">
+          <body style="font-family:sans-serif;background:#0f172a;color:#f8fafc;display:flex;align-items:center;justify-content:center;height:100vh;margin:0;padding:1rem;">
+            <div style="text-align:center;padding:2rem;background:#1e293b;border-radius:1rem;border:1px solid #ef4444;max-width:520px;box-shadow:0 25px 50px -12px rgba(0,0,0,0.5);">
               <div style="font-size:3rem;margin-bottom:1rem;">❌</div>
-              <h2 style="margin:0 0 0.5rem 0;color:#ef4444;">Connection Failed</h2>
-              <p style="color:#94a3b8;font-size:0.875rem;white-space:pre-wrap;word-break:break-word;">${err instanceof Error ? err.message : String(err)}</p>
-              <button onclick="window.close()" style="margin-top:1rem;padding:0.5rem 1.25rem;background:#334155;color:#fff;border:none;border-radius:0.5rem;cursor:pointer;">Close Window</button>
+              <h2 style="margin:0 0 0.5rem 0;color:#ef4444;">Google Drive Connection Failed</h2>
+              <p style="color:#94a3b8;font-size:0.875rem;white-space:pre-wrap;word-break:break-word;margin-bottom:1.25rem;">${errMsg}</p>
+              ${
+                isDriveApiDisabled
+                  ? `<div style="text-align:left;background:#0f172a;padding:1rem;border-radius:0.5rem;font-size:0.8rem;color:#cbd5e1;margin-bottom:1rem;line-height:1.5;border:1px solid #334155;">
+                      <strong style="color:#fbbf24;">How to resolve:</strong><br>
+                      The <strong>Google Drive API</strong> must be enabled in your Google Cloud project.<br><br>
+                      1. Open <a href="https://console.cloud.google.com/apis/library/drive.googleapis.com" target="_blank" style="color:#60a5fa;text-decoration:underline;">Google Cloud Console &rarr; Google Drive API</a>.<br>
+                      2. Click the blue <strong>Enable</strong> button.<br>
+                      3. Return to VaultRealm and click <strong>Sign in with Google</strong> again.
+                    </div>`
+                  : ''
+              }
+              ${
+                isRedirectUriMismatch
+                  ? `<div style="text-align:left;background:#0f172a;padding:1rem;border-radius:0.5rem;font-size:0.8rem;color:#cbd5e1;margin-bottom:1rem;line-height:1.5;border:1px solid #334155;">
+                      <strong style="color:#fbbf24;">Redirect URI Mismatch:</strong><br>
+                      Add this exact URL to your Google Cloud Console OAuth Client &rarr; Authorized redirect URIs:<br>
+                      <code style="display:block;margin-top:0.25rem;padding:0.25rem;background:#1e293b;color:#38bdf8;word-break:break-all;">${redirectUri}</code>
+                    </div>`
+                  : ''
+              }
+              <div style="text-align:left;background:#0f172a;padding:0.75rem 1rem;border-radius:0.5rem;font-size:0.75rem;color:#94a3b8;margin-bottom:1rem;line-height:1.4;border:1px solid #334155;">
+                <strong style="color:#38bdf8;">Tip:</strong> If you prefer not to manage a Google Cloud project, switch to the <strong>Shared Folder (Zero Cloud Setup)</strong> tab in VaultRealm.
+              </div>
+              <button onclick="window.close()" style="padding:0.5rem 1.25rem;background:#334155;color:#fff;border:none;border-radius:0.5rem;cursor:pointer;font-weight:600;">Close Window</button>
             </div>
           </body>
           </html>

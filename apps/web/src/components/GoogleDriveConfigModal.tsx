@@ -540,6 +540,30 @@ export function GoogleDriveConfigModal({ open, onClose, onSaved }: GoogleDriveCo
           {/* ─────────────────── TAB 1: SIGN IN WITH GOOGLE ─────────────────── */}
           {activeTab === 'login' && (
             <div className="space-y-5">
+              {/* Raw IP Warning */}
+              {typeof window !== 'undefined' &&
+                window.location.hostname !== 'localhost' &&
+                window.location.hostname !== '127.0.0.1' &&
+                /^(?:\d{1,3}\.){3}\d{1,3}$/.test(window.location.hostname) && (
+                  <div className="p-3.5 rounded-xl bg-amber-500/10 border border-amber-500/30 text-xs text-amber-200 space-y-1.5">
+                    <div className="flex items-center gap-2 font-bold text-amber-300">
+                      <span>⚠️</span>
+                      <span>Accessing via Raw IP Address ({window.location.hostname})</span>
+                    </div>
+                    <p className="text-[11px] text-amber-200/90 leading-relaxed">
+                      Google OAuth 2.0 policy disallows numeric IP addresses as Authorized Redirect URIs. For server deployments without a domain name, click the{' '}
+                      <button
+                        type="button"
+                        onClick={() => setActiveTab('shared-folder')}
+                        className="underline font-bold text-amber-300 hover:text-white cursor-pointer"
+                      >
+                        Shared Folder (Zero Cloud Setup)
+                      </button>{' '}
+                      tab above — it connects in 60 seconds with no domain or Google Cloud credentials needed.
+                    </p>
+                  </div>
+                )}
+
               <div className="text-center py-4 px-3 rounded-2xl bg-card-subtle border border-border/80 space-y-4">
                 <div className="max-w-md mx-auto space-y-1.5">
                   <h4 className="text-sm font-bold text-foreground">Connect with 1-Click Google Login</h4>
@@ -584,6 +608,38 @@ export function GoogleDriveConfigModal({ open, onClose, onSaved }: GoogleDriveCo
                     </svg>
                     <span>{loading ? 'Opening Google...' : 'Sign in with Google'}</span>
                   </button>
+                </div>
+
+                {/* Important Checklist Callout */}
+                <div className="text-left bg-card p-3 rounded-xl border border-border/60 text-[11px] text-muted-foreground space-y-1.5 max-w-lg mx-auto">
+                  <div className="font-semibold text-foreground flex items-center gap-1.5">
+                    <span>📋</span>
+                    <span>Common Setup Requirements:</span>
+                  </div>
+                  <ul className="list-disc list-inside space-y-1 text-[11px] text-zinc-300">
+                    <li>
+                      <strong>Google Drive API:</strong> Must be enabled in{' '}
+                      <a
+                        href="https://console.cloud.google.com/apis/library/drive.googleapis.com"
+                        target="_blank"
+                        rel="noreferrer"
+                        className="text-primary hover:underline"
+                      >
+                        API Library ↗
+                      </a>
+                    </li>
+                    <li>
+                      <strong>Test Users:</strong> If your OAuth consent screen is in <em>"Testing"</em> status, add your Google account to{' '}
+                      <a
+                        href="https://console.cloud.google.com/apis/credentials/consent"
+                        target="_blank"
+                        rel="noreferrer"
+                        className="text-primary hover:underline"
+                      >
+                        OAuth consent screen &rarr; Test users ↗
+                      </a>
+                    </li>
+                  </ul>
                 </div>
               </div>
 
