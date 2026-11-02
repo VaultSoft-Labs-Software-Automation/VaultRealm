@@ -9,6 +9,7 @@ import type { FastifyInstance } from 'fastify';
 import { z } from 'zod';
 import { eq, and, desc } from 'drizzle-orm';
 import { nanoid } from 'nanoid';
+import fs from 'node:fs';
 import { getDatabase } from '../db/index.js';
 import { bots, servers, serverPorts, events, llmEndpoints, users, botUsage, botTraces } from '../db/schema.js';
 import { requireAuth, getRequestUser } from '../auth/middleware.js';
@@ -17,6 +18,8 @@ import { validate } from '../validation.js';
 import { writeAudit } from '../audit/log.js';
 import { getConfig } from '../config.js';
 import { getDockerDriver } from '../servers/service.js';
+import { getServerDataDir } from '../servers/volume.js';
+import { safepath } from '../safepath.js';
 import { createBotToken } from './bot-tokens.js';
 
 // ── Validation Schemas ────────────────────────────────────────────────────────
@@ -28,7 +31,9 @@ const updateBotSchema = z.object({
   model: z.string().max(100).optional().nullable(),
   mode: z.enum(['off', 'manual', 'auto-solo', 'always']).default('manual'),
   authMode: z.enum(['offline', 'microsoft', 'proxy']).default('offline'),
-  whoCanCommand: z.string().default('owner_only'),
+  whoCanCommand: z.enum(['everyone', 'trusted', 'owner_only', 'owner']).default('everyone'),
+  ownerPlayerName: z.string().max(32).optional().nullable(),
+  trustedPlayers: z.array(z.string().max(32)).optional(),
   dailyTokenBudget: z.number().int().min(1000).max(10_000_000).default(200_000),
   rpmLimit: z.number().int().min(1).max(120).default(10),
   proactive: z.boolean().default(false),
@@ -82,6 +87,15 @@ export async function botRoutes(app: FastifyInstance): Promise<void> {
       }
     }
 
+    let permissionsConfig: { ownerPlayerName?: string; trustedPlayers?: string[] } = {};
+    if (existing.permissionsJson) {
+      try {
+        permissionsConfig = JSON.parse(existing.permissionsJson);
+      } catch {
+        // ignore
+      }
+    }
+
     return reply.send({
       configured: true,
       bot: {
@@ -94,6 +108,8 @@ export async function botRoutes(app: FastifyInstance): Promise<void> {
         mode: existing.mode,
         authMode: existing.authMode,
         whoCanCommand: existing.whoCanCommand,
+        ownerPlayerName: permissionsConfig.ownerPlayerName ?? '',
+        trustedPlayers: permissionsConfig.trustedPlayers ?? [],
         proactive: existing.proactive,
         dailyTokenBudget: existing.dailyTokenBudget,
         rpmLimit: existing.rpmLimit,
@@ -134,6 +150,28 @@ export async function botRoutes(app: FastifyInstance): Promise<void> {
     const existing = db.select().from(bots).where(eq(bots.serverId, serverId)).all()[0];
     let botId: string;
 
+    let permissionsConfig: { ownerPlayerName?: string; trustedPlayers?: string[] } = {};
+    if (existing?.permissionsJson) {
+      try {
+        permissionsConfig = JSON.parse(existing.permissionsJson);
+      } catch {
+        // ignore
+      }
+    }
+    if (data.ownerPlayerName !== undefined) {
+      permissionsConfig.ownerPlayerName = data.ownerPlayerName?.trim() || undefined;
+    }
+    if (data.trustedPlayers !== undefined) {
+      permissionsConfig.trustedPlayers = data.trustedPlayers.map((p) => p.trim()).filter(Boolean);
+    }
+    const permissionsJson = JSON.stringify(permissionsConfig);
+    const normalizedWhoCanCommand =
+      data.whoCanCommand === 'owner' || data.whoCanCommand === 'owner_only'
+        ? 'owner_only'
+        : data.whoCanCommand === 'trusted'
+          ? 'trusted'
+          : 'everyone';
+
     if (existing) {
       botId = existing.id;
       db.update(bots)
@@ -144,7 +182,8 @@ export async function botRoutes(app: FastifyInstance): Promise<void> {
           model: data.model ?? null,
           mode: data.mode,
           authMode: data.authMode,
-          whoCanCommand: data.whoCanCommand,
+          whoCanCommand: normalizedWhoCanCommand,
+          permissionsJson,
           dailyTokenBudget: data.dailyTokenBudget,
           rpmLimit: data.rpmLimit,
           proactive: data.proactive,
@@ -163,7 +202,8 @@ export async function botRoutes(app: FastifyInstance): Promise<void> {
           model: data.model ?? null,
           mode: data.mode,
           authMode: data.authMode,
-          whoCanCommand: data.whoCanCommand,
+          whoCanCommand: normalizedWhoCanCommand,
+          permissionsJson,
           dailyTokenBudget: data.dailyTokenBudget,
           rpmLimit: data.rpmLimit,
           proactive: data.proactive,
@@ -320,8 +360,55 @@ export async function botRoutes(app: FastifyInstance): Promise<void> {
         }
       }
 
+      // 1. Read ops.json from server storage if present to auto-detect server operators
+      let serverOps: string[] = [];
+      try {
+        const serverDir = getServerDataDir(serverId);
+        const opsPath = safepath.resolve(serverDir, 'ops.json');
+        if (fs.existsSync(opsPath)) {
+          const raw = fs.readFileSync(opsPath, 'utf8');
+          const parsed = JSON.parse(raw);
+          if (Array.isArray(parsed)) {
+            serverOps = parsed
+              .map((p) => (typeof p?.name === 'string' ? p.name.trim() : ''))
+              .filter(Boolean);
+          }
+        }
+      } catch {
+        // ignore
+      }
+
+      // 2. Read stored permissions configuration
+      let permissionsConfig: { ownerPlayerName?: string; trustedPlayers?: string[] } = {};
+      try {
+        permissionsConfig = JSON.parse(bot.permissionsJson || '{}');
+      } catch {
+        // ignore
+      }
+
       const userRecord = db.select().from(users).where(eq(users.id, user.id)).all()[0];
-      const ownerName = userRecord?.username ?? 'admin';
+
+      // Effective owner: configured in-game owner > first server op > panel username > 'admin'
+      const ownerName =
+        permissionsConfig.ownerPlayerName?.trim() ||
+        serverOps[0] ||
+        userRecord?.username ||
+        'admin';
+
+      // Effective trusted players: configured trusted + server ops (excluding owner)
+      const configuredTrusted = Array.isArray(permissionsConfig.trustedPlayers)
+        ? permissionsConfig.trustedPlayers
+        : [];
+      const combinedTrusted = Array.from(
+        new Set([...configuredTrusted, ...serverOps]),
+      ).filter((name) => name.toLowerCase() !== ownerName.toLowerCase());
+
+      const whoCanCommand =
+        bot.whoCanCommand === 'owner' || bot.whoCanCommand === 'owner_only'
+          ? 'owner_only'
+          : bot.whoCanCommand === 'trusted'
+            ? 'trusted'
+            : 'everyone';
 
       const containerName = `vaultrealm-bot-${bot.id}`;
       const containerId = await driver.createContainer({
@@ -343,7 +430,8 @@ export async function botRoutes(app: FastifyInstance): Promise<void> {
           PANEL_GATEWAY_URL: panelGatewayUrl,
           BOT_TOKEN: token,
           OWNER_NAME: ownerName,
-          WHO_CAN_COMMAND: bot.whoCanCommand === 'owner' || bot.whoCanCommand === 'owner_only' ? 'owner_only' : bot.whoCanCommand === 'trusted' ? 'trusted' : 'everyone',
+          TRUSTED_PLAYERS: combinedTrusted.join(','),
+          WHO_CAN_COMMAND: whoCanCommand,
           PROTECTED_ZONES_JSON: bot.protectedZonesJson || '[]',
           MINECRAFT_VERSION: (() => {
             try {
