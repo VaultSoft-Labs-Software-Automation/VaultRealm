@@ -532,6 +532,29 @@ export const api = {
     }),
   getServerBackupDownloadUrl: (serverId: string, backupId: string) =>
     `/api/servers/${serverId}/backups/${backupId}/download`,
+  uploadAndRestoreServerBackup: (
+    serverId: string,
+    data: {
+      filename: string;
+      contentBase64: string;
+      name?: string;
+      restoreImmediately?: boolean;
+    },
+  ) =>
+    request<{ backup: BackupDetail; restored: boolean; message: string }>(
+      `/api/servers/${serverId}/backups/upload`,
+      {
+        method: 'POST',
+        body: JSON.stringify(data),
+      },
+    ),
+  getUnindexedBackups: (serverId: string) =>
+    request<{ unindexed: UnindexedBackup[] }>(`/api/servers/${serverId}/backups/unindexed`),
+  restoreServerFromFile: (serverId: string, data: { filename: string; name?: string }) =>
+    request<{ message: string; backup: BackupDetail }>(`/api/servers/${serverId}/backups/restore-file`, {
+      method: 'POST',
+      body: JSON.stringify(data),
+    }),
 
   // System Backups & Google Drive Settings
   getGoogleDriveConfig: () =>
@@ -639,6 +662,12 @@ export interface BackupDetail {
   gdriveFileId: string | null;
   gdriveWebLink: string | null;
   createdAt: string;
+}
+
+export interface UnindexedBackup {
+  filename: string;
+  sizeBytes: number;
+  modifiedAt: string;
 }
 
 export interface PublicGoogleDriveConfig {

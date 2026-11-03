@@ -20,6 +20,9 @@ import {
   createFullSystemBackup,
   listSystemBackups,
   getBackupsDir,
+  uploadAndRestoreServerBackup,
+  listUnindexedBackups,
+  restoreServerFromLocalFile,
 } from './service.js';
 import {
   getPublicDriveConfig,
@@ -34,6 +37,18 @@ import {
 const createBackupSchema = z.object({
   name: z.string().max(80).optional(),
   uploadToDrive: z.boolean().optional().default(false),
+});
+
+const uploadBackupSchema = z.object({
+  filename: z.string().min(1, 'Filename is required').max(255),
+  contentBase64: z.string().min(1, 'File content cannot be empty'),
+  name: z.string().max(80).optional(),
+  restoreImmediately: z.boolean().optional().default(true),
+});
+
+const restoreFileSchema = z.object({
+  filename: z.string().min(1, 'Filename is required').max(255),
+  name: z.string().max(80).optional(),
 });
 
 const driveConfigSchema = z.object({
@@ -100,6 +115,90 @@ export async function backupRoutes(app: FastifyInstance): Promise<void> {
 
       const backup = await createServerBackup(serverId, user.id, parsed.data, request.ip);
       return reply.status(201).send(backup);
+    },
+  );
+
+  // POST /api/servers/:id/backups/upload (Manual upload and optional instant restore)
+  app.post<{ Params: { id: string }; Body: unknown }>(
+    '/api/servers/:id/backups/upload',
+    {
+      preHandler: [requireAuth],
+      bodyLimit: 500 * 1024 * 1024,
+    },
+    async (request, reply) => {
+      const user = getRequestUser(request);
+      const { id: serverId } = request.params;
+      await assertCan(user, 'server:backups', serverId);
+
+      const parsed = uploadBackupSchema.safeParse(request.body);
+      if (!parsed.success) {
+        return reply.status(400).send({
+          code: 'VALIDATION_ERROR',
+          message: 'Invalid upload backup parameters.',
+          details: parsed.error.issues.map((i) => i.message),
+        });
+      }
+
+      const result = await uploadAndRestoreServerBackup(
+        serverId,
+        user.id,
+        parsed.data,
+        request.ip,
+      );
+
+      return reply.status(201).send({
+        ...result,
+        message: result.restored
+          ? 'Backup uploaded and server successfully restored!'
+          : 'Backup uploaded and saved to snapshot history.',
+      });
+    },
+  );
+
+  // GET /api/servers/:id/backups/unindexed (List unindexed local archives in backups folder)
+  app.get<{ Params: { id: string } }>(
+    '/api/servers/:id/backups/unindexed',
+    { preHandler: [requireAuth] },
+    async (request) => {
+      const user = getRequestUser(request);
+      const { id: serverId } = request.params;
+      await assertCan(user, 'server:backups', serverId);
+
+      const unindexed = await listUnindexedBackups(serverId);
+      return { unindexed };
+    },
+  );
+
+  // POST /api/servers/:id/backups/restore-file (Restore server from an existing local archive file)
+  app.post<{ Params: { id: string }; Body: unknown }>(
+    '/api/servers/:id/backups/restore-file',
+    { preHandler: [requireAuth] },
+    async (request, reply) => {
+      const user = getRequestUser(request);
+      const { id: serverId } = request.params;
+      await assertCan(user, 'server:backups', serverId);
+
+      const parsed = restoreFileSchema.safeParse(request.body);
+      if (!parsed.success) {
+        return reply.status(400).send({
+          code: 'VALIDATION_ERROR',
+          message: 'Invalid restore parameters.',
+          details: parsed.error.issues.map((i) => i.message),
+        });
+      }
+
+      const result = await restoreServerFromLocalFile(
+        serverId,
+        parsed.data.filename,
+        user.id,
+        { name: parsed.data.name },
+        request.ip,
+      );
+
+      return reply.send({
+        message: 'Server successfully restored from backup file.',
+        backup: result.backup,
+      });
     },
   );
 

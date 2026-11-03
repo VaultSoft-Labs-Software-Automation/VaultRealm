@@ -87,7 +87,7 @@ EXPOSE 3001
 
 # Health check
 HEALTHCHECK --interval=30s --timeout=5s --start-period=10s --retries=3 \
-    CMD wget -qO- http://127.0.0.1:3001/healthz || exit 1
+    CMD wget -qO- http://127.0.0.1:${PORT:-3001}/healthz || exit 1
 
 # Run the API server (serves frontend assets in production)
 CMD ["node", "apps/api/dist/index.js"]
