@@ -20,6 +20,14 @@ export function AdminView({ onBack }: AdminViewProps) {
   const [maxUses, setMaxUses] = useState(10);
   const [creating, setCreating] = useState(false);
 
+  // Telegram Bot Management
+  const [telegramConfig, setTelegramConfig] = useState<import('../api/client').PublicTelegramConfig | null>(null);
+  const [telegramToken, setTelegramToken] = useState('');
+  const [telegramChatIds, setTelegramChatIds] = useState('');
+  const [telegramEnabled, setTelegramEnabled] = useState(false);
+  const [telegramNotifications, setTelegramNotifications] = useState(true);
+  const [savingTelegram, setSavingTelegram] = useState(false);
+
   // Google Drive & System Backups
   const [gdriveConfig, setGdriveConfig] = useState<PublicGoogleDriveConfig | null>(null);
   const [systemBackups, setSystemBackups] = useState<SystemBackupDetail[]>([]);
@@ -31,11 +39,12 @@ export function AdminView({ onBack }: AdminViewProps) {
 
   const loadData = async () => {
     try {
-      const [invitesData, capacityData, driveData, systemBackupsData] = await Promise.allSettled([
+      const [invitesData, capacityData, driveData, systemBackupsData, telegramData] = await Promise.allSettled([
         api.listInvites(),
         api.getCapacity(),
         api.getGoogleDriveConfig(),
         api.listSystemBackups(),
+        api.getTelegramConfig(),
       ]);
 
       if (invitesData.status === 'fulfilled') setInvites(invitesData.value);
@@ -47,6 +56,12 @@ export function AdminView({ onBack }: AdminViewProps) {
         }
       }
       if (systemBackupsData.status === 'fulfilled') setSystemBackups(systemBackupsData.value.backups);
+      if (telegramData.status === 'fulfilled') {
+        setTelegramConfig(telegramData.value);
+        setTelegramEnabled(telegramData.value.enabled);
+        setTelegramNotifications(telegramData.value.notificationsEnabled);
+        setTelegramChatIds((telegramData.value.allowedChatIds || []).join(', '));
+      }
     } catch (err) {
       console.error(err);
     }
@@ -55,6 +70,28 @@ export function AdminView({ onBack }: AdminViewProps) {
   useEffect(() => {
     loadData();
   }, []);
+
+  const handleSaveTelegram = async () => {
+    setSavingTelegram(true);
+    try {
+      const chatIds = telegramChatIds.split(',').map((id) => id.trim()).filter(Boolean);
+      const data: { token?: string; enabled: boolean; allowedChatIds: string[]; notificationsEnabled: boolean } = {
+        enabled: telegramEnabled,
+        allowedChatIds: chatIds,
+        notificationsEnabled: telegramNotifications,
+      };
+      if (telegramToken.trim()) data.token = telegramToken.trim();
+      const result = await api.saveTelegramConfig(data);
+      setTelegramConfig(result.config);
+      setTelegramToken('');
+      addToast({ type: 'success', title: 'Telegram bot settings saved.' });
+    } catch (err) {
+      const error = err as ApiError;
+      addToast({ type: 'error', title: 'Could not save Telegram settings', message: error.message });
+    } finally {
+      setSavingTelegram(false);
+    }
+  };
 
   const handleCreateInvite = async () => {
     setCreating(true);
@@ -245,6 +282,62 @@ export function AdminView({ onBack }: AdminViewProps) {
               </span>
             </div>
           </div>
+        </div>
+      </div>
+
+      {/* Telegram Bot Management */}
+      <div className="card p-6 border border-border/80 space-y-5">
+        <div className="flex items-center justify-between border-b border-border/60 pb-4">
+          <div>
+            <h2 className="text-base font-bold text-foreground">Telegram Server Management Bot</h2>
+            <p className="text-xs text-muted-foreground mt-1">
+              Manage server power, Minecraft settings, console commands, and backups from Telegram.
+            </p>
+          </div>
+          <span className={`badge ${telegramConfig?.configured && telegramEnabled ? 'badge-success' : 'badge-neutral'}`}>
+            {telegramConfig?.configured && telegramEnabled ? 'Active' : 'Not active'}
+          </span>
+        </div>
+
+        <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+          <label className="space-y-1.5">
+            <span className="text-xs font-semibold text-foreground">Bot Token</span>
+            <input
+              type="password"
+              value={telegramToken}
+              onChange={(e) => setTelegramToken(e.target.value)}
+              placeholder={telegramConfig?.configured ? 'Token already configured (enter to replace)' : 'Paste token from @BotFather'}
+              className="input w-full text-xs"
+            />
+          </label>
+          <label className="space-y-1.5">
+            <span className="text-xs font-semibold text-foreground">Allowed Telegram User/Chat IDs</span>
+            <input
+              type="text"
+              value={telegramChatIds}
+              onChange={(e) => setTelegramChatIds(e.target.value)}
+              placeholder="123456789, -1001234567890"
+              className="input w-full text-xs"
+            />
+            <span className="text-[10px] text-muted-foreground">Use /start with the bot to see your IDs. Separate multiple IDs with commas.</span>
+          </label>
+        </div>
+
+        <div className="flex flex-wrap items-center gap-5 text-xs">
+          <label className="flex items-center gap-2 cursor-pointer">
+            <input type="checkbox" checked={telegramEnabled} onChange={(e) => setTelegramEnabled(e.target.checked)} />
+            Enable bot management
+          </label>
+          <label className="flex items-center gap-2 cursor-pointer">
+            <input type="checkbox" checked={telegramNotifications} onChange={(e) => setTelegramNotifications(e.target.checked)} />
+            Send server alerts
+          </label>
+        </div>
+
+        <div className="flex justify-end">
+          <button onClick={handleSaveTelegram} disabled={savingTelegram} className="btn btn-primary text-xs">
+            {savingTelegram ? 'Saving...' : 'Save Telegram Settings'}
+          </button>
         </div>
       </div>
 

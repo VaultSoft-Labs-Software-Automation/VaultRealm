@@ -65,6 +65,9 @@ const envSchema = z.object({
 
   /** Alias for Google OAuth Client Secret */
   CLIENT_SECRET: z.string().optional(),
+
+  /** Telegram bot token for server management */
+  TELEGRAM_BOT_TOKEN: z.string().optional(),
 });
 
 export type Config = z.infer<typeof envSchema>;

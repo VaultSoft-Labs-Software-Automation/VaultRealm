@@ -433,6 +433,20 @@ export const api = {
     ),
 
   // Admin
+  getTelegramConfig: () => request<PublicTelegramConfig>('/api/system/telegram'),
+  saveTelegramConfig: (data: {
+    token?: string;
+    enabled?: boolean;
+    allowedChatIds?: string[];
+    notificationsEnabled?: boolean;
+  }) => request<{ message: string; config: PublicTelegramConfig }>('/api/system/telegram', {
+    method: 'PUT',
+    body: JSON.stringify(data),
+  }),
+  testTelegramToken: (token: string) => request<{ ok: boolean; botUsername?: string; botFirstName?: string }>('/api/system/telegram/test', {
+    method: 'POST',
+    body: JSON.stringify({ token }),
+  }),
   listInvites: () => request<Array<{ id: string; code: string; uses: number; maxUses: number; createdAt: string }>>('/api/admin/invites'),
   createInvite: (maxUses = 10) =>
     request<{ id: string; code: string; maxUses: number }>('/api/admin/invites', {
@@ -668,6 +682,18 @@ export interface UnindexedBackup {
   filename: string;
   sizeBytes: number;
   modifiedAt: string;
+}
+
+export interface PublicTelegramConfig {
+  configured: boolean;
+  enabled: boolean;
+  botUsername?: string;
+  botFirstName?: string;
+  allowedChatIds?: string[];
+  notificationsEnabled: boolean;
+  pollingActive: boolean;
+  hasEnvToken: boolean;
+  updatedAt?: string;
 }
 
 export interface PublicGoogleDriveConfig {

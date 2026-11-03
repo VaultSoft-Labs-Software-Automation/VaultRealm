@@ -7,6 +7,8 @@ import { initDatabase, runMigrations, closeDatabase } from './db/index.js';
 import { authRoutes } from './auth/index.js';
 import { serverRoutes, setDockerDriver } from './servers/index.js';
 import { backupRoutes } from './backups/routes.js';
+import { telegramRoutes } from './telegram/routes.js';
+import { startTelegramPolling, stopTelegramPolling } from './telegram/service.js';
 import { registerRealtimeGateway } from './realtime/index.js';
 import { companionRoutes, botRoutes, registerGateway } from './companion/index.js';
 import { registerStatic, isSpaRoute } from './static.js';
@@ -75,6 +77,7 @@ async function main() {
   await app.register(companionRoutes);
   await app.register(botRoutes);
   await app.register(backupRoutes);
+  await app.register(telegramRoutes);
   await registerGateway(app);
 
   // ── Static frontend assets (production / built web) ───────────────────────
@@ -123,6 +126,7 @@ async function main() {
   // ── Graceful shutdown ──────────────────────────────────────────────────────
   const shutdown = async (signal: string) => {
     app.log.info(`Received ${signal}, shutting down...`);
+    stopTelegramPolling();
     await app.close();
     closeDatabase();
     process.exit(0);
@@ -135,6 +139,8 @@ async function main() {
   try {
     await app.listen({ port: config.PORT, host: '0.0.0.0' });
     app.log.info(`VaultRealm API running on port ${config.PORT}`);
+    // Start Telegram long polling if configured and enabled
+    startTelegramPolling();
   } catch (err) {
     app.log.fatal(err);
     process.exit(1);
