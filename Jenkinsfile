@@ -1,4 +1,4 @@
-// Runs a script on the Lightsail server using the Jenkins credentials
+// Runs a shell script on the Lightsail server using Jenkins credentials
 def remote(String script) {
     withCredentials([
         sshUserPrivateKey(credentialsId: 'lightsail-ssh',
@@ -23,36 +23,55 @@ pipeline {
         timeout(time: 30, unit: 'MINUTES')
     }
 
+    environment {
+        IMAGE   = 'vaultrealm'
+        TAG     = "${env.BUILD_NUMBER}"
+        APP_DIR = '/opt/vaultrealm'
+    }
+
     stages {
         stage('Checkout') {
             steps { checkout scm }
         }
 
-        stage('Deploy') {
-            when { branch 'main' }
+        stage('Build image') {
+            when { branch 'master' }
             steps {
-                script {
-                    remote('''
+                sh '''
+                    docker build --platform linux/amd64 \
+                        -t $IMAGE:$TAG -t $IMAGE:latest .
+                '''
+            }
+        }
+
+        stage('Ship & deploy') {
+            when { branch 'master' }
+            steps {
+                withCredentials([
+                    sshUserPrivateKey(credentialsId: 'lightsail-ssh',
+                                      keyFileVariable: 'SSH_KEY',
+                                      usernameVariable: 'SSH_USER'),
+                    string(credentialsId: 'lightsail-host', variable: 'SSH_HOST')
+                ]) {
+                    sh '''
                         set -euo pipefail
-                        APP_DIR=/opt/vaultrealm
+                        SSH_OPTS="-i $SSH_KEY -o IdentitiesOnly=yes -o StrictHostKeyChecking=accept-new"
+                        REMOTE="$SSH_USER@$SSH_HOST"
 
-                        if [ ! -d "$APP_DIR/.git" ]; then
-                          git clone git@github.com:HypertextAssassinRajith/VaultRealm.git "$APP_DIR"
-                        fi
+                        ssh $SSH_OPTS $REMOTE "mkdir -p $APP_DIR"
+                        scp $SSH_OPTS docker-compose.yml Caddyfile $REMOTE:$APP_DIR/
 
-                        cd "$APP_DIR"
-                        git fetch origin main
-                        git reset --hard origin/main
+                        docker save $IMAGE:latest $IMAGE:$TAG | gzip \
+                            | ssh $SSH_OPTS $REMOTE 'gunzip | docker load'
 
-                        docker compose up -d --build --remove-orphans
-                        docker image prune -f
-                    ''')
+                        ssh $SSH_OPTS $REMOTE "cd $APP_DIR && docker compose up -d --no-build --remove-orphans && docker image prune -f"
+                    '''
                 }
             }
         }
 
         stage('Health check') {
-            when { branch 'main' }
+            when { branch 'master' }
             steps {
                 script {
                     remote('''
@@ -72,7 +91,7 @@ pipeline {
     }
 
     post {
-        success { echo 'Deployed successfully.' }
         failure { echo 'Deploy failed, check the console output.' }
+        always  { sh 'docker image prune -f || true' }
     }
 }
