@@ -80,10 +80,31 @@ export interface InstalledMod {
   modifiedAt: string;
 }
 
+export interface InstalledModpackInfo {
+  name: string;
+  versionId?: string;
+  installedAt: string;
+  dependencies?: Record<string, string>;
+  installedModsCount: number;
+  installedFilesCount: number;
+}
+
+export interface InstallModResponse {
+  filename: string;
+  sizeBytes: number;
+  isMrpack?: boolean;
+  modpackName?: string;
+  versionId?: string;
+  installedModsCount?: number;
+  installedFilesCount?: number;
+  skippedClientModsCount?: number;
+}
+
 export interface ServerModsResponse {
   folder: string;
   detectedGameVersion?: string | null;
   serverType?: string | null;
+  modpack?: InstalledModpackInfo | null;
   mods: InstalledMod[];
 }
 
@@ -326,7 +347,7 @@ export const api = {
     id: string,
     data: { downloadUrl: string; filename: string; projectId?: string; title?: string },
   ) =>
-    request<{ filename: string; sizeBytes: number }>(`/api/servers/${id}/mods/install`, {
+    request<InstallModResponse>(`/api/servers/${id}/mods/install`, {
       method: 'POST',
       body: JSON.stringify(data),
     }),
@@ -334,7 +355,7 @@ export const api = {
     id: string,
     data: { filename: string; contentBase64: string },
   ) =>
-    request<{ filename: string; sizeBytes: number }>(`/api/servers/${id}/mods/upload`, {
+    request<InstallModResponse>(`/api/servers/${id}/mods/upload`, {
       method: 'POST',
       body: JSON.stringify(data),
     }),

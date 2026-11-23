@@ -21,6 +21,7 @@ import {
   getAddonsFolder,
   detectServerGameVersion,
   saveUploadedMod,
+  getInstalledModpack,
 } from './mods.js';
 import {
   getServerPlayersData,
@@ -438,10 +439,12 @@ export async function serverRoutes(app: FastifyInstance): Promise<void> {
     const folder = getAddonsFolder(detail.templateId);
     const detectedGameVersion = detectServerGameVersion(id, detail.templateId) || detail.version;
     const mods = await listInstalledMods(id, detail.templateId);
+    const modpack = getInstalledModpack(id);
     return {
       folder,
       detectedGameVersion,
       serverType: detail.serverType,
+      modpack,
       mods,
     };
   });
