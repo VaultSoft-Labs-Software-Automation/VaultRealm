@@ -1,4 +1,5 @@
 import { type ServerDetail, type CapacityStatus } from '../api/client';
+import { useToast } from './Toast';
 
 interface DashboardProps {
   servers: ServerDetail[];
@@ -15,6 +16,7 @@ export function Dashboard({
   onOpenDeploy,
   onQuickPower,
 }: DashboardProps) {
+  const { addToast } = useToast();
   const hostRamTotal = capacity?.host.totalHostRamMb ?? 8192;
   const hostRamBudget = capacity?.host.budgetRamMb ?? 6963;
   const hostRamAllocated = capacity?.host.allocatedRamMb ?? 0;
@@ -26,25 +28,25 @@ export function Dashboard({
   const userRamQuota = capacity?.user.quotaRamMb ?? 8192;
 
   return (
-    <div className="space-y-8 animate-fade-in">
+    <div className="space-y-6 sm:space-y-8 animate-fade-in">
       {/* Top Resource Summary Strip */}
-      <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
+      <div className="grid grid-cols-2 lg:grid-cols-4 gap-2.5 sm:gap-4">
         {/* Host RAM Budget Guard */}
-        <div className="card p-5 flex flex-col justify-between">
+        <div className="card p-3.5 sm:p-5 flex flex-col justify-between">
           <div>
-            <div className="flex justify-between items-center mb-2">
-              <span className="text-xs font-semibold text-muted-foreground uppercase tracking-wider flex items-center gap-1.5">
-                <span>🛡️</span> Host RAM Budget
+            <div className="flex justify-between items-center mb-1.5 sm:mb-2">
+              <span className="text-[10px] sm:text-xs font-semibold text-muted-foreground uppercase tracking-wider flex items-center gap-1">
+                <span>🛡️</span> <span className="hidden xs:inline">Host </span>RAM
               </span>
-              <span className="badge badge-primary text-[10px]">{hostRamPercent}%</span>
+              <span className="badge badge-primary text-[9px] sm:text-[10px] py-0 px-1 sm:px-1.5">{hostRamPercent}%</span>
             </div>
-            <div className="text-2xl font-bold font-mono text-foreground mt-1">
+            <div className="text-lg sm:text-2xl font-bold font-mono text-foreground mt-0.5 sm:mt-1">
               {hostRamAllocated}{' '}
-              <span className="text-xs font-normal text-muted-foreground">/ {hostRamBudget} MB</span>
+              <span className="text-[10px] sm:text-xs font-normal text-muted-foreground">/ {hostRamBudget} MB</span>
             </div>
           </div>
           <div>
-            <div className="w-full bg-muted rounded-full h-2 mt-4 overflow-hidden">
+            <div className="w-full bg-muted rounded-full h-1.5 sm:h-2 mt-2.5 sm:mt-4 overflow-hidden">
               <div
                 className={`h-full rounded-full transition-all duration-500 ${
                   hostRamPercent > 80 ? 'bg-amber-500' : 'bg-primary'
@@ -52,87 +54,87 @@ export function Dashboard({
                 style={{ width: `${hostRamPercent}%` }}
               />
             </div>
-            <span className="text-[10px] text-muted-foreground mt-2 block">
-              85% safety cap of {hostRamTotal} MB host memory
+            <span className="text-[9px] sm:text-[10px] text-muted-foreground mt-1.5 sm:mt-2 block truncate">
+              85% cap of {hostRamTotal} MB host RAM
             </span>
           </div>
         </div>
 
         {/* User Server Quota */}
-        <div className="card p-5 flex flex-col justify-between">
+        <div className="card p-3.5 sm:p-5 flex flex-col justify-between">
           <div>
-            <div className="flex justify-between items-center mb-2">
-              <span className="text-xs font-semibold text-muted-foreground uppercase tracking-wider flex items-center gap-1.5">
-                <span>🎮</span> Server Quota
+            <div className="flex justify-between items-center mb-1.5 sm:mb-2">
+              <span className="text-[10px] sm:text-xs font-semibold text-muted-foreground uppercase tracking-wider flex items-center gap-1">
+                <span>🎮</span> Servers
               </span>
-              <span className="badge badge-success text-[10px]">
+              <span className="badge badge-success text-[9px] sm:text-[10px] py-0 px-1 sm:px-1.5">
                 {userServersCount}/{userServersQuota}
               </span>
             </div>
-            <div className="text-2xl font-bold font-mono text-foreground mt-1">
+            <div className="text-lg sm:text-2xl font-bold font-mono text-foreground mt-0.5 sm:mt-1">
               {userServersCount}{' '}
-              <span className="text-xs font-normal text-muted-foreground">Active Servers</span>
+              <span className="text-[10px] sm:text-xs font-normal text-muted-foreground">Active</span>
             </div>
           </div>
           <div>
-            <div className="w-full bg-muted rounded-full h-2 mt-4 overflow-hidden">
+            <div className="w-full bg-muted rounded-full h-1.5 sm:h-2 mt-2.5 sm:mt-4 overflow-hidden">
               <div
                 className="bg-emerald-500 h-full rounded-full transition-all duration-500"
                 style={{ width: `${Math.min(100, (userServersCount / userServersQuota) * 100)}%` }}
               />
             </div>
-            <span className="text-[10px] text-muted-foreground mt-2 block">
-              {userServersQuota - userServersCount} server slot(s) remaining
+            <span className="text-[9px] sm:text-[10px] text-muted-foreground mt-1.5 sm:mt-2 block truncate">
+              {userServersQuota - userServersCount} slot(s) remaining
             </span>
           </div>
         </div>
 
         {/* User RAM Quota */}
-        <div className="card p-5 flex flex-col justify-between">
+        <div className="card p-3.5 sm:p-5 flex flex-col justify-between">
           <div>
-            <div className="flex justify-between items-center mb-2">
-              <span className="text-xs font-semibold text-muted-foreground uppercase tracking-wider flex items-center gap-1.5">
-                <span>⚡</span> Memory Quota
+            <div className="flex justify-between items-center mb-1.5 sm:mb-2">
+              <span className="text-[10px] sm:text-xs font-semibold text-muted-foreground uppercase tracking-wider flex items-center gap-1">
+                <span>⚡</span> Memory
               </span>
-              <span className="badge badge-primary text-[10px]">
+              <span className="badge badge-primary text-[9px] sm:text-[10px] py-0 px-1 sm:px-1.5">
                 {Math.round((userRamUsed / userRamQuota) * 100)}%
               </span>
             </div>
-            <div className="text-2xl font-bold font-mono text-foreground mt-1">
+            <div className="text-lg sm:text-2xl font-bold font-mono text-foreground mt-0.5 sm:mt-1">
               {userRamUsed}{' '}
-              <span className="text-xs font-normal text-muted-foreground">/ {userRamQuota} MB</span>
+              <span className="text-[10px] sm:text-xs font-normal text-muted-foreground">/ {userRamQuota} MB</span>
             </div>
           </div>
           <div>
-            <div className="w-full bg-muted rounded-full h-2 mt-4 overflow-hidden">
+            <div className="w-full bg-muted rounded-full h-1.5 sm:h-2 mt-2.5 sm:mt-4 overflow-hidden">
               <div
                 className="bg-primary h-full rounded-full transition-all duration-500"
                 style={{ width: `${Math.min(100, (userRamUsed / userRamQuota) * 100)}%` }}
               />
             </div>
-            <span className="text-[10px] text-muted-foreground mt-2 block">
-              {userRamQuota - userRamUsed} MB available to allocate
+            <span className="text-[9px] sm:text-[10px] text-muted-foreground mt-1.5 sm:mt-2 block truncate">
+              {userRamQuota - userRamUsed} MB available
             </span>
           </div>
         </div>
 
         {/* Quick Action Card */}
-        <div className="card p-5 border-primary/30 bg-gradient-to-br from-primary/10 via-card to-card flex flex-col justify-between glow-primary">
+        <div className="card p-3.5 sm:p-5 border-primary/30 bg-gradient-to-br from-primary/10 via-card to-card flex flex-col justify-between glow-primary">
           <div>
-            <div className="flex items-center gap-1.5 mb-2">
-              <span className="text-xs font-bold text-primary uppercase tracking-wider">
-                🚀 Quick Deploy
+            <div className="flex items-center gap-1 mb-1 sm:mb-2">
+              <span className="text-[10px] sm:text-xs font-bold text-primary uppercase tracking-wider">
+                🚀 Deploy
               </span>
             </div>
-            <p className="text-xs text-muted-foreground leading-relaxed">
-              Launch a new containerized game server in seconds.
+            <p className="text-[10px] sm:text-xs text-muted-foreground leading-relaxed line-clamp-2">
+              Instant game container.
             </p>
           </div>
           <button
             onClick={onOpenDeploy}
-            className="btn btn-primary text-xs py-2.5 w-full font-bold shadow-md mt-4"
+            className="btn btn-primary text-xs py-2 sm:py-2.5 w-full font-bold shadow-md mt-2.5 sm:mt-4"
           >
-            Deploy Server 🚀
+            Deploy 🚀
           </button>
         </div>
       </div>
@@ -254,11 +256,22 @@ export function Dashboard({
                     )}
 
                     {/* Connection Address */}
-                    <div className="mt-2 flex items-center gap-1.5 bg-card-subtle px-2.5 py-1.5 rounded-md border border-border/60">
-                      <span className="text-[11px] text-muted-foreground font-mono">Connect:</span>
-                      <span className="text-xs font-mono font-semibold text-primary truncate">
-                        {joinAddress}
-                      </span>
+                    <div
+                      onClick={(e) => {
+                        e.stopPropagation();
+                        navigator.clipboard.writeText(joinAddress);
+                        addToast({ type: 'info', title: 'Address copied to clipboard' });
+                      }}
+                      className="mt-2 flex items-center justify-between gap-1.5 bg-card-subtle px-2.5 py-1.5 rounded-md border border-border/60 hover:border-primary/40 transition-colors cursor-pointer"
+                      title="Tap to copy connection address"
+                    >
+                      <div className="flex items-center gap-1.5 min-w-0">
+                        <span className="text-[11px] text-muted-foreground font-mono">Connect:</span>
+                        <span className="text-xs font-mono font-semibold text-primary truncate">
+                          {joinAddress}
+                        </span>
+                      </div>
+                      <span className="text-[11px] text-muted-foreground shrink-0 hover:text-primary">📋</span>
                     </div>
 
                     {/* Memory allocation bar */}

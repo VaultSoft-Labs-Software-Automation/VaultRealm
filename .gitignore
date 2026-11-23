@@ -25,4 +25,5 @@ Thumbs.db
 
 # Logs
 *.log
+!apps/api/test/fixtures/**
 logs/

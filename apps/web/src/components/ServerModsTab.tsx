@@ -1,5 +1,5 @@
 import { useState, useEffect } from 'react';
-import { api, type ServerDetail, type InstalledMod } from '../api/client';
+import { api, type ServerDetail, type InstalledMod, type InstalledModpackInfo } from '../api/client';
 import { useToast } from './Toast';
 
 interface ServerModsTabProps {
@@ -9,6 +9,7 @@ interface ServerModsTabProps {
 
 interface ModrinthHit {
   project_id: string;
+  project_type?: 'mod' | 'modpack' | 'plugin';
   slug: string;
   title: string;
   description: string;
@@ -50,12 +51,14 @@ interface ModrinthVersion {
 export function ServerModsTab({ server, onRestartServer }: ServerModsTabProps) {
   const [subtab, setSubtab] = useState<'installed' | 'browse'>('browse');
   const [installedMods, setInstalledMods] = useState<InstalledMod[]>([]);
+  const [installedModpack, setInstalledModpack] = useState<InstalledModpackInfo | null>(null);
   const [addonsFolder, setAddonsFolder] = useState<'mods' | 'plugins'>('mods');
   const [runningGameVersion, setRunningGameVersion] = useState<string | null>(null);
   const [loadingInstalled, setLoadingInstalled] = useState(false);
 
   // Search state
   const [searchQuery, setSearchQuery] = useState('');
+  const [projectTypeFilter, setProjectTypeFilter] = useState<'all' | 'mod' | 'modpack'>('all');
   const [searchResults, setSearchResults] = useState<ModrinthHit[]>([]);
   const [isSearching, setIsSearching] = useState(false);
   const [installingId, setInstallingId] = useState<string | null>(null);
@@ -84,6 +87,7 @@ export function ServerModsTab({ server, onRestartServer }: ServerModsTabProps) {
     try {
       const res = await api.listServerMods(server.id);
       setInstalledMods(res.mods);
+      setInstalledModpack(res.modpack ?? null);
       setAddonsFolder(res.folder === 'plugins' ? 'plugins' : 'mods');
       if (res.detectedGameVersion) {
         setRunningGameVersion(res.detectedGameVersion);
@@ -99,7 +103,7 @@ export function ServerModsTab({ server, onRestartServer }: ServerModsTabProps) {
     loadInstalled();
   }, [server.id]);
 
-  // Search Modrinth API with exact loader and version filtering
+  // Search Modrinth API with exact loader, version, and type filtering
   const searchModrinth = async (query = searchQuery) => {
     setIsSearching(true);
     try {
@@ -111,6 +115,9 @@ export function ServerModsTab({ server, onRestartServer }: ServerModsTabProps) {
       const facets: string[][] = [[`categories:${loaderFacet}`]];
       if (activeGameVersion) {
         facets.push([`versions:${activeGameVersion}`]);
+      }
+      if (projectTypeFilter !== 'all') {
+        facets.push([`project_type:${projectTypeFilter}`]);
       }
       url.searchParams.set('facets', JSON.stringify(facets));
 
@@ -129,7 +136,11 @@ export function ServerModsTab({ server, onRestartServer }: ServerModsTabProps) {
       // Fallback search without strict version facet
       try {
         const loaderFacet = getLoaderFacet();
-        const fallbackUrl = `https://api.modrinth.com/v2/search?query=${encodeURIComponent(query)}&limit=12&facets=[["categories:${loaderFacet}"]]`;
+        const fallbackFacets: string[][] = [[`categories:${loaderFacet}`]];
+        if (projectTypeFilter !== 'all') {
+          fallbackFacets.push([`project_type:${projectTypeFilter}`]);
+        }
+        const fallbackUrl = `https://api.modrinth.com/v2/search?query=${encodeURIComponent(query)}&limit=12&facets=${encodeURIComponent(JSON.stringify(fallbackFacets))}`;
         const res = await fetch(fallbackUrl);
         const data = (await res.json()) as ModrinthSearchResponse;
         setSearchResults(data.hits || []);
@@ -145,7 +156,7 @@ export function ServerModsTab({ server, onRestartServer }: ServerModsTabProps) {
     if (subtab === 'browse') {
       searchModrinth(searchQuery);
     }
-  }, [subtab]);
+  }, [subtab, projectTypeFilter]);
 
   // Install a mod directly from Modrinth with compatible version check and dependency resolution
   const handleInstallMod = async (hit: ModrinthHit) => {
@@ -268,22 +279,30 @@ export function ServerModsTab({ server, onRestartServer }: ServerModsTabProps) {
         }
       }
 
-      // 4. Request panel backend to safely download .jar to /data/mods
-      await api.installServerMod(server.id, {
+      // 4. Request panel backend to safely download .jar or extract .mrpack modpack
+      const installRes = await api.installServerMod(server.id, {
         downloadUrl: primaryFile.url,
         filename: primaryFile.filename,
         projectId: hit.slug,
         title: hit.title,
       });
 
-      addToast({
-        type: 'success',
-        title: `Installed ${hit.title}`,
-        message:
-          installedDepsList.length > 0
-            ? `Installed ${hit.title} and auto-resolved dependencies (${installedDepsList.join(', ')}). Restart server to load.`
-            : `Installed into /${addonsFolder} (compatible with MC ${activeGameVersion || 'game'}). Restart server to activate.`,
-      });
+      if (installRes.isMrpack) {
+        addToast({
+          type: 'success',
+          title: `Modpack Installed: ${installRes.modpackName || hit.title}`,
+          message: `Installed modpack: ${installRes.installedModsCount ?? 0} server mods downloaded, ${installRes.installedFilesCount ?? 0} config files extracted (${installRes.skippedClientModsCount ?? 0} client mods excluded). Restart server to activate.`,
+        });
+      } else {
+        addToast({
+          type: 'success',
+          title: `Installed ${hit.title}`,
+          message:
+            installedDepsList.length > 0
+              ? `Installed ${hit.title} and auto-resolved dependencies (${installedDepsList.join(', ')}). Restart server to load.`
+              : `Installed into /${addonsFolder} (compatible with MC ${activeGameVersion || 'game'}). Restart server to activate.`,
+        });
+      }
 
       await loadInstalled();
     } catch (err) {
@@ -297,20 +316,24 @@ export function ServerModsTab({ server, onRestartServer }: ServerModsTabProps) {
     }
   };
 
-  // Upload mod file handler
+  // Upload mod or modpack file handler
   const processUploadFiles = async (files: FileList | File[]) => {
     setIsUploading(true);
     let uploadedCount = 0;
+    let modpacksInstalled = 0;
 
     for (let i = 0; i < files.length; i++) {
       const file = files[i];
       if (!file) continue;
 
-      if (!file.name.endsWith('.jar') && !file.name.endsWith('.jar.disabled')) {
+      const isJar = file.name.endsWith('.jar') || file.name.endsWith('.jar.disabled');
+      const isMrpack = file.name.endsWith('.mrpack');
+
+      if (!isJar && !isMrpack) {
         addToast({
           type: 'error',
           title: 'Invalid File',
-          message: `${file.name} is not a .jar mod/plugin file.`,
+          message: `${file.name} is not a valid .jar mod or .mrpack modpack file.`,
         });
         continue;
       }
@@ -327,12 +350,21 @@ export function ServerModsTab({ server, onRestartServer }: ServerModsTabProps) {
           reader.readAsDataURL(file);
         });
 
-        await api.uploadServerMod(server.id, {
+        const uploadRes = await api.uploadServerMod(server.id, {
           filename: file.name,
           contentBase64: base64,
         });
 
-        uploadedCount++;
+        if (uploadRes.isMrpack) {
+          modpacksInstalled++;
+          addToast({
+            type: 'success',
+            title: `Modpack Installed: ${uploadRes.modpackName || file.name}`,
+            message: `Extracted modpack: installed ${uploadRes.installedModsCount ?? 0} server mods and ${uploadRes.installedFilesCount ?? 0} config files (${uploadRes.skippedClientModsCount ?? 0} client mods excluded). Restart server to activate.`,
+          });
+        } else {
+          uploadedCount++;
+        }
       } catch (err) {
         addToast({
           type: 'error',
@@ -349,6 +381,8 @@ export function ServerModsTab({ server, onRestartServer }: ServerModsTabProps) {
         title: 'Upload Successful',
         message: `Uploaded ${uploadedCount} file(s) into /${addonsFolder}. Restart server to apply.`,
       });
+    }
+    if (uploadedCount > 0 || modpacksInstalled > 0) {
       await loadInstalled();
     }
   };
@@ -410,7 +444,7 @@ export function ServerModsTab({ server, onRestartServer }: ServerModsTabProps) {
   return (
     <div className="space-y-6 animate-fade-in">
       {/* Header Strip with Controls */}
-      <div className="card p-5 border border-border/80 flex flex-col sm:flex-row sm:items-center justify-between gap-4">
+      <div className="card p-3.5 sm:p-5 border border-border/80 flex flex-col sm:flex-row sm:items-center justify-between gap-3 sm:gap-4">
         <div>
           <div className="flex items-center gap-2 flex-wrap">
             <h3 className="font-bold text-base text-foreground flex items-center gap-2">
@@ -437,12 +471,12 @@ export function ServerModsTab({ server, onRestartServer }: ServerModsTabProps) {
           </p>
         </div>
 
-        <div className="flex items-center gap-2">
+        <div className="flex flex-col sm:flex-row items-stretch sm:items-center gap-2">
           {/* Subtabs */}
           <div className="flex bg-card-subtle p-1 rounded-lg border border-border">
             <button
               onClick={() => setSubtab('browse')}
-              className={`px-3 py-1.5 text-xs font-semibold rounded-md transition-all ${
+              className={`flex-1 sm:flex-none px-3 py-1.5 text-xs font-semibold rounded-md transition-all ${
                 subtab === 'browse'
                   ? 'bg-primary text-primary-foreground shadow-sm'
                   : 'text-muted-foreground hover:text-foreground'
@@ -455,7 +489,7 @@ export function ServerModsTab({ server, onRestartServer }: ServerModsTabProps) {
                 setSubtab('installed');
                 loadInstalled();
               }}
-              className={`px-3 py-1.5 text-xs font-semibold rounded-md transition-all flex items-center gap-1.5 ${
+              className={`flex-1 sm:flex-none px-3 py-1.5 text-xs font-semibold rounded-md transition-all flex items-center justify-center gap-1.5 ${
                 subtab === 'installed'
                   ? 'bg-primary text-primary-foreground shadow-sm'
                   : 'text-muted-foreground hover:text-foreground'
@@ -471,7 +505,7 @@ export function ServerModsTab({ server, onRestartServer }: ServerModsTabProps) {
           {onRestartServer && (
             <button
               onClick={onRestartServer}
-              className="btn btn-secondary text-xs py-1.5 px-3 flex items-center gap-1 text-amber-400 hover:text-amber-300 border-amber-500/30"
+              className="btn btn-secondary text-xs py-1.5 px-3 flex items-center justify-center gap-1 text-amber-400 hover:text-amber-300 border-amber-500/30"
               title="Restart server to load new mods"
             >
               🔄 Restart Server
@@ -483,12 +517,12 @@ export function ServerModsTab({ server, onRestartServer }: ServerModsTabProps) {
       {/* ── Subtab 1: Browse Open Source Mods ──────────────────────────────── */}
       {subtab === 'browse' && (
         <div className="space-y-4">
-          {/* Search bar */}
-          <div className="flex gap-2">
+          {/* Search bar & Type Filter */}
+          <div className="flex flex-col sm:flex-row gap-2">
             <div className="relative flex-1">
               <input
                 type="text"
-                placeholder={`Search ${server.serverType || 'Fabric'} mods compatible with MC ${activeGameVersion || 'game'}...`}
+                placeholder={`Search ${server.serverType || 'Fabric'} ${projectTypeFilter === 'modpack' ? 'modpacks' : 'mods'} for MC ${activeGameVersion || 'game'}...`}
                 value={searchQuery}
                 onChange={(e) => setSearchQuery(e.target.value)}
                 onKeyDown={(e) => e.key === 'Enter' && searchModrinth(searchQuery)}
@@ -496,13 +530,24 @@ export function ServerModsTab({ server, onRestartServer }: ServerModsTabProps) {
               />
               <span className="absolute left-2.5 top-2.5 text-xs text-muted-foreground">🔍</span>
             </div>
-            <button
-              onClick={() => searchModrinth(searchQuery)}
-              disabled={isSearching}
-              className="btn btn-primary text-xs px-4 font-semibold"
-            >
-              {isSearching ? 'Searching...' : 'Search'}
-            </button>
+            <div className="flex gap-2">
+              <select
+                value={projectTypeFilter}
+                onChange={(e) => setProjectTypeFilter(e.target.value as 'all' | 'mod' | 'modpack')}
+                className="input text-xs py-1.5 px-2 font-mono bg-card cursor-pointer border border-border"
+              >
+                <option value="all">All Addons</option>
+                <option value="mod">Mods Only</option>
+                <option value="modpack">Modpacks (.mrpack)</option>
+              </select>
+              <button
+                onClick={() => searchModrinth(searchQuery)}
+                disabled={isSearching}
+                className="btn btn-primary text-xs px-4 font-semibold"
+              >
+                {isSearching ? 'Searching...' : 'Search'}
+              </button>
+            </div>
           </div>
 
           {/* Quick-Picks Pills for Popular Server Mods */}
@@ -566,9 +611,16 @@ export function ServerModsTab({ server, onRestartServer }: ServerModsTabProps) {
                           <h4 className="font-bold text-sm text-foreground group-hover:text-primary transition-colors truncate">
                             {hit.title}
                           </h4>
-                          <span className="text-[10px] text-muted-foreground font-mono block truncate">
-                            by {hit.author}
-                          </span>
+                          <div className="flex items-center gap-1.5 mt-0.5">
+                            <span className="text-[10px] text-muted-foreground font-mono block truncate">
+                              by {hit.author}
+                            </span>
+                            {hit.project_type === 'modpack' && (
+                              <span className="badge badge-primary text-[9px] py-0 px-1 font-mono uppercase">
+                                Modpack
+                              </span>
+                            )}
+                          </div>
                         </div>
                       </div>
 
@@ -597,6 +649,8 @@ export function ServerModsTab({ server, onRestartServer }: ServerModsTabProps) {
                           </span>
                         ) : isInstalled ? (
                           '✓ Installed (Reinstall)'
+                        ) : hit.project_type === 'modpack' ? (
+                          '📦 Install Modpack'
                         ) : (
                           '⬇ Install Mod'
                         )}
@@ -613,7 +667,44 @@ export function ServerModsTab({ server, onRestartServer }: ServerModsTabProps) {
       {/* ── Subtab 2: Installed Mods ───────────────────────────────────────── */}
       {subtab === 'installed' && (
         <div className="space-y-4">
-          {/* Upload Mod (.jar) Drag and Drop Zone */}
+          {/* Active Installed Modpack Banner */}
+          {installedModpack && (
+            <div className="card p-4 border border-primary/40 bg-gradient-to-r from-primary/10 via-card to-card glow-primary">
+              <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
+                <div className="flex items-start gap-3">
+                  <span className="text-3xl p-2 rounded-xl bg-primary/20 border border-primary/30">📦</span>
+                  <div>
+                    <div className="flex items-center gap-2 flex-wrap">
+                      <h4 className="font-bold text-sm text-foreground">
+                        {installedModpack.name}
+                      </h4>
+                      <span className="badge badge-primary text-[10px] font-mono">
+                        MODPACK
+                      </span>
+                      {installedModpack.versionId && (
+                        <span className="badge badge-neutral text-[10px] font-mono text-violet-300 border-violet-500/30">
+                          {installedModpack.versionId}
+                        </span>
+                      )}
+                    </div>
+                    <p className="text-xs text-muted-foreground mt-1">
+                      Active modpack extracted into server with{' '}
+                      <span className="text-foreground font-semibold">{installedModpack.installedModsCount} mods</span> and{' '}
+                      <span className="text-foreground font-semibold">{installedModpack.installedFilesCount} config/override files</span>.
+                    </p>
+                    <div className="flex items-center gap-3 text-[10px] text-muted-foreground font-mono mt-1.5 flex-wrap">
+                      <span>Installed: {new Date(installedModpack.installedAt).toLocaleString()}</span>
+                      {installedModpack.dependencies && Object.keys(installedModpack.dependencies).length > 0 && (
+                        <span>• Requires: {Object.entries(installedModpack.dependencies).map(([k, v]) => `${k} ${v}`).join(', ')}</span>
+                      )}
+                    </div>
+                  </div>
+                </div>
+              </div>
+            </div>
+          )}
+
+          {/* Upload Mod (.jar) or Modpack (.mrpack) Drag and Drop Zone */}
           <div
             onDragOver={(e) => {
               e.preventDefault();
@@ -632,19 +723,19 @@ export function ServerModsTab({ server, onRestartServer }: ServerModsTabProps) {
                 <span className="text-2xl">{isUploading ? '⏳' : '📤'}</span>
                 <div>
                   <h4 className="text-xs font-bold text-foreground">
-                    {isUploading ? 'Uploading custom mod file...' : 'Upload Custom Mod or Plugin (.jar)'}
+                    {isUploading ? 'Installing custom mod or modpack...' : 'Upload Custom Mod (.jar) or Modpack (.mrpack)'}
                   </h4>
                   <p className="text-[11px] text-muted-foreground">
-                    Drag & drop custom <span className="font-mono text-foreground">.jar</span> files from your computer or browse to upload into <span className="font-mono text-foreground">/{addonsFolder}</span>
+                    Drag & drop custom <span className="font-mono text-foreground">.jar</span> mods or Modrinth <span className="font-mono text-foreground">.mrpack</span> modpacks to install into your server
                   </p>
                 </div>
               </div>
 
               <label className="btn btn-primary text-xs py-1.5 px-3 font-semibold cursor-pointer shrink-0">
-                <span>{isUploading ? 'Uploading...' : '📁 Browse .jar File'}</span>
+                <span>{isUploading ? 'Installing...' : '📁 Browse .jar / .mrpack'}</span>
                 <input
                   type="file"
-                  accept=".jar,.disabled"
+                  accept=".jar,.disabled,.mrpack"
                   multiple
                   disabled={isUploading}
                   className="hidden"

@@ -6,6 +6,7 @@
 
 import type { GatewayChatMessage, GatewayChatResponse } from './types.js';
 import type { ToolDefinition } from './skills/definitions.js';
+import { resolveGatewayUrl } from './dns-fallback.js';
 
 export interface ChatCompletionResult {
   role: string;
@@ -31,7 +32,8 @@ export class GatewayClient {
     maxTokens = 300,
     timeoutMs = 25000,
   ): Promise<ChatCompletionResult> {
-    const url = `${this.gatewayUrl}/internal/llm/chat`;
+    const resolvedGatewayUrl = await resolveGatewayUrl(this.gatewayUrl);
+    const url = `${resolvedGatewayUrl}/internal/llm/chat`;
     const controller = new AbortController();
     const timer = setTimeout(() => controller.abort(), timeoutMs);
 

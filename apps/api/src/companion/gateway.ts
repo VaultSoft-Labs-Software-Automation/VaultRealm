@@ -270,7 +270,7 @@ export async function registerGateway(app: FastifyInstance): Promise<void> {
       } catch {
         return reply.status(500).send({
           code: 'KEY_DECRYPT_ERROR',
-          message: 'Could not decrypt API key. The PANEL_SECRET may have changed.',
+          message: 'Could not decrypt API key. The PANEL_SECRET may have changed. Please re-enter your API key in the Companion settings.',
         });
       }
     }

@@ -189,13 +189,13 @@ export function DeployWizard({ onClose, onSuccess }: DeployWizardProps) {
   };
 
   return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/80 backdrop-blur-md p-4 animate-fade-in">
-      <div className="card max-w-2xl w-full p-8 border border-border shadow-2xl relative max-h-[90vh] flex flex-col glow-primary">
+    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/80 backdrop-blur-md p-2 sm:p-4 animate-fade-in">
+      <div className="card max-w-2xl w-full p-4 sm:p-6 md:p-8 border border-border shadow-2xl relative max-h-[94vh] sm:max-h-[90vh] flex flex-col glow-primary">
         {/* Header */}
-        <div className="flex items-center justify-between pb-4 border-b border-border mb-6">
+        <div className="flex items-center justify-between pb-3 sm:pb-4 border-b border-border mb-4 sm:mb-6 shrink-0">
           <div>
-            <h2 className="text-xl font-bold gradient-text">One-Click Deploy Wizard</h2>
-            <p className="text-xs text-muted-foreground mt-0.5">
+            <h2 className="text-lg sm:text-xl font-bold gradient-text">One-Click Deploy Wizard</h2>
+            <p className="text-[11px] sm:text-xs text-muted-foreground mt-0.5">
               {step === 1 && 'Step 1: Choose a game template to deploy'}
               {step === 2 && `Step 2: Configure ${selectedTemplate?.name} specifications`}
               {step === 3 && 'Step 3: Tracking deployment state machine'}
@@ -208,7 +208,7 @@ export function DeployWizard({ onClose, onSuccess }: DeployWizardProps) {
               }
               onClose();
             }}
-            className="btn btn-ghost btn-sm p-1 text-base leading-none"
+            className="btn btn-ghost btn-sm p-1.5 text-base leading-none"
             title="Close"
           >
             ✕
@@ -217,8 +217,8 @@ export function DeployWizard({ onClose, onSuccess }: DeployWizardProps) {
 
         {/* Step 1: Template Selection */}
         {step === 1 && (
-          <div className="flex-1 overflow-y-auto space-y-3 pr-1">
-            <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
+          <div className="flex-1 overflow-y-auto space-y-3 pr-1 touch-scroll">
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-2.5 sm:gap-3">
               {templates.map((t) => (
                 <div
                   key={t.id}

@@ -111,10 +111,16 @@ body {
     border: 1px solid var(--color-border);
     border-radius: var(--radius-md);
     padding: 0.65rem 0.875rem;
-    font-size: 0.875rem;
+    font-size: 1rem; /* 16px on mobile prevents iOS Safari auto-zoom */
     color: var(--color-foreground);
     outline: none;
     transition: border-color 0.15s ease, box-shadow 0.15s ease, background-color 0.15s ease;
+  }
+
+  @media (min-width: 640px) {
+    .input {
+      font-size: 0.875rem;
+    }
   }
 
   .input:focus {
@@ -286,6 +292,20 @@ body {
     -webkit-background-clip: text;
     -webkit-text-fill-color: transparent;
     background-clip: text;
+  }
+
+  /* Mobile scroll utilities */
+  .no-scrollbar::-webkit-scrollbar {
+    display: none;
+  }
+  .no-scrollbar {
+    -ms-overflow-style: none;
+    scrollbar-width: none;
+  }
+
+  .touch-scroll {
+    -webkit-overflow-scrolling: touch;
+    scroll-behavior: smooth;
   }
 
 }

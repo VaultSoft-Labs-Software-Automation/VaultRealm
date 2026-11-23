@@ -144,32 +144,30 @@ export function AppContent() {
     <div className={`w-full min-h-screen flex flex-col bg-background text-foreground ${theme}`}>
       {/* ── Navigation Bar ────────────────────────────────────────────────── */}
       <header className="w-full border-b border-border bg-card/80 backdrop-blur-lg sticky top-0 z-40 shadow-sm">
-        <div className="w-full mx-auto max-w-[1600px] px-6 sm:px-8 lg:px-10 py-3.5 flex items-center justify-between gap-4">
+        <div className="w-full mx-auto max-w-[1600px] px-3 sm:px-6 lg:px-10 py-2.5 sm:py-3.5 flex items-center justify-between gap-2 sm:gap-4">
           <div
             onClick={() => {
               setSelectedServerId(null);
               setShowAdmin(false);
             }}
-            className="flex items-center gap-3.5 cursor-pointer group select-none"
+            className="flex items-center gap-2.5 sm:gap-3.5 cursor-pointer group select-none min-w-0"
           >
             <img
               src="/VR2.jpg"
               alt="VaultRealm"
-              className="h-11 w-auto object-contain rounded-lg shadow-sm border border-border/40 group-hover:scale-105 transition-transform"
+              className="h-8 sm:h-11 w-auto object-contain rounded-lg shadow-sm border border-border/40 group-hover:scale-105 transition-transform shrink-0"
             />
-            <div className="flex flex-col">
-              <div className="flex items-center gap-2">
-                <span className="badge badge-primary text-[10px] py-0.5 px-2 font-mono">v0.5</span>
-                <span className="text-[11px] text-muted-foreground hidden sm:inline-block font-mono">
-                  Panel
-                </span>
+            <div className="flex flex-col min-w-0">
+              <div className="flex items-center gap-1.5 sm:gap-2">
+                <span className="font-bold text-xs sm:text-sm text-foreground tracking-tight truncate">VaultRealm</span>
+                <span className="badge badge-primary text-[9px] sm:text-[10px] py-0 px-1.5 font-mono">v0.5</span>
               </div>
               <a
                 href="https://www.vaultsoftlabs.tech/"
                 target="_blank"
                 rel="noopener noreferrer"
                 onClick={(e) => e.stopPropagation()}
-                className="text-[11px] text-muted-foreground hover:text-primary transition-colors flex items-center gap-1 font-mono tracking-tight mt-0.5"
+                className="hidden sm:flex text-[11px] text-muted-foreground hover:text-primary transition-colors items-center gap-1 font-mono tracking-tight mt-0.5"
                 title="Engineered by VaultSoft Labs"
               >
                 <span>by</span>
@@ -179,40 +177,42 @@ export function AppContent() {
             </div>
           </div>
 
-          <div className="flex items-center gap-3">
+          <div className="flex items-center gap-1.5 sm:gap-3 shrink-0">
             {/* Theme Toggle */}
             <button
               onClick={toggleTheme}
-              className="btn btn-secondary btn-sm p-2 text-xs"
+              className="btn btn-secondary btn-sm p-1.5 sm:p-2 text-xs"
               title={theme === 'dark' ? 'Switch to light mode' : 'Switch to dark mode'}
             >
               {theme === 'dark' ? '☀️' : '🌙'}
             </button>
 
             {currentUser ? (
-              <div className="flex items-center gap-3">
+              <div className="flex items-center gap-1.5 sm:gap-3">
                 {currentUser.role === 'admin' && (
                   <button
                     onClick={() => {
                       setShowAdmin(true);
                       setSelectedServerId(null);
                     }}
-                    className={`btn btn-sm ${
+                    className={`btn btn-sm px-2 sm:px-3 text-xs ${
                       showAdmin
                         ? 'btn-primary'
                         : 'btn-secondary text-muted-foreground hover:text-foreground'
                     }`}
                   >
-                    ⚙️ Admin Control
+                    <span>⚙️</span>
+                    <span className="hidden sm:inline">Admin Control</span>
+                    <span className="sm:hidden">Admin</span>
                   </button>
                 )}
 
-                <div className="flex items-center gap-3 pl-3 border-l border-border">
-                  <div className="flex items-center gap-2">
-                    <div className="h-7 w-7 rounded-full bg-primary/20 border border-primary/30 flex items-center justify-center text-xs font-bold text-primary">
+                <div className="flex items-center gap-1.5 sm:gap-3 pl-1.5 sm:pl-3 border-l border-border">
+                  <div className="flex items-center gap-1.5 sm:gap-2">
+                    <div className="h-7 w-7 rounded-full bg-primary/20 border border-primary/30 flex items-center justify-center text-xs font-bold text-primary shrink-0">
                       {currentUser.username.charAt(0).toUpperCase()}
                     </div>
-                    <div className="text-left hidden sm:block">
+                    <div className="text-left hidden md:block">
                       <span className="text-xs font-bold text-foreground block leading-none mb-0.5">
                         {currentUser.username}
                       </span>
@@ -236,7 +236,7 @@ export function AppContent() {
       </header>
 
       {/* ── Main Content Area ─────────────────────────────────────────────── */}
-      <main className="flex-1 w-full mx-auto max-w-[1600px] px-6 sm:px-8 lg:px-10 py-6 sm:py-8">
+      <main className="flex-1 w-full mx-auto max-w-[1600px] px-3 sm:px-6 lg:px-10 py-4 sm:py-6 lg:py-8">
         {!currentUser ? (
           <AuthModal
             needsSetup={needsSetup ?? false}

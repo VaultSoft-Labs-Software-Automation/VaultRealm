@@ -89,8 +89,13 @@ describe('Bot Runner Chat Engine (§9B.5)', () => {
 
     it('handles !follow and !come without LLM', () => {
       expect(handleFastCommand('!follow', 'Buddy').isFastCommand).toBe(true);
+      expect(handleFastCommand('!follow me', 'Buddy').isFastCommand).toBe(true);
+      expect(handleFastCommand('follow me', 'Buddy').isFastCommand).toBe(true);
       expect(handleFastCommand('!come', 'Buddy').isFastCommand).toBe(true);
+      expect(handleFastCommand('!come me', 'Buddy').isFastCommand).toBe(true);
+      expect(handleFastCommand('come here', 'Buddy').isFastCommand).toBe(true);
       expect(handleFastCommand('!stay', 'Buddy').isFastCommand).toBe(true);
+      expect(handleFastCommand('stay here', 'Buddy').isFastCommand).toBe(true);
     });
 
     it('returns isFastCommand: false for natural language', () => {

@@ -76,6 +76,8 @@ pnpm lint         # ESLint (both apps)
 pnpm build        # Production build
 pnpm db:generate  # Generate Drizzle migrations
 pnpm db:migrate   # Run pending migrations
+pnpm docker:build     # Build panel container (vaultrealm:latest)
+pnpm docker:build:bot # Build companion bot container (vaultrealm/bot-runner:latest)
 ```
 
 ---
@@ -674,15 +676,83 @@ Register the route in the appropriate `routes.ts` file. Add a test verifying aut
 
 ### Local Docker Build
 
+#### 1. Build the Panel and Companion Bot Runner Images
+
+VaultRealm consists of two container images:
+1. **`vaultrealm:latest`** — The unified control panel (Fastify API + React frontend).
+2. **`vaultrealm/bot-runner:latest`** — The containerized AI companion runner that joins game servers as an autonomous in-game player via Mineflayer.
+
+```bash
+# Build the control panel image
+docker build -t vaultrealm .
+
+# Build the companion bot runner image
+docker build -f apps/bot-runner/Dockerfile -t vaultrealm/bot-runner:latest .
+```
+
+You can also run the built-in pnpm workspace scripts:
+```bash
+# Build both images
+pnpm docker:build
+pnpm docker:build:bot
+```
+
+#### 2. Companion Bot Container Commands
+
+When working directly with the Companion Bot container during development or troubleshooting:
+
+```bash
+# Build / rebuild the companion bot container image
+docker build -f apps/bot-runner/Dockerfile -t vaultrealm/bot-runner:latest .
+
+# Inspect the bot runner image in Docker
+docker images vaultrealm/bot-runner:latest
+
+# Check active companion bot containers
+docker ps --filter "label=vaultrealm.bot"
+
+# View live companion bot container logs (CLI)
+docker logs -f <container-id-or-name>
+# Example:
+docker logs -f $(docker ps -q --filter "ancestor=vaultrealm/bot-runner:latest")
+
+# Test run bot container in standalone interactive mode
+docker run --rm -it \
+  --add-host host.docker.internal:host-gateway \
+  -e BOT_ID=dev-bot \
+  -e BOT_NAME=Buddy \
+  -e SERVER_HOST=host.docker.internal \
+  -e SERVER_PORT=25000 \
+  -e AUTH_MODE=offline \
+  -e WHO_CAN_COMMAND=owner_only \
+  -e BOT_TOKEN=mock-token \
+  vaultrealm/bot-runner:latest
+
+# Stop and remove all active bot containers
+docker rm -f $(docker ps -aq --filter "ancestor=vaultrealm/bot-runner:latest")
+```
+
+> [!TIP]
+> You can also view live real-time bot container logs directly inside the VaultRealm web panel under **AI Companion -> 📜 Bot Live Logs**.
+
+#### 3. Run the Panel
+
 ```bash
 docker build -t vaultrealm .
 docker run -p 3001:3001 \
   -e PANEL_SECRET=my-secret-key-change-me \
   -v /var/run/docker.sock:/var/run/docker.sock \
   -v /srv/vaultrealm/data:/srv/vaultrealm/data \
-  vaultrealm
+vaultrealm
 ```
 
+```powershell
+docker run -d -p 3001:3001 `
+  -e PANEL_SECRET=my-secret-key-change-me `
+  -v /var/run/docker.sock:/var/run/docker.sock `
+  -v /srv/vaultrealm/data:/srv/vaultrealm/data `
+  vaultrealm
+```
 ### Production with Docker Compose
 
 ```bash
@@ -696,12 +766,22 @@ docker compose up -d
 
 ### CI/CD (GitHub Actions)
 
-The workflow at [`.github/workflows/docker-publish.yml`](.github/workflows/docker-publish.yml) automatically:
+VaultRealm includes automated container build and publication pipelines:
 
-- **On push to `main`** → builds and pushes `ghcr.io/hypertextassassinrajith/vaultrealm:latest`
-- **On version tag `v*.*.*`** → pushes semver-tagged images (`1.2.3`, `1.2`, `1`)
-- **On PRs** → builds to validate (no push)
-- Uses GitHub Actions build cache for fast rebuilds
+1. **Docker Hub Publishing** ([`.github/workflows/docker-image.yml`](../.github/workflows/docker-image.yml)):
+   - Builds and pushes **VaultRealm** (`hypertextassassin/vaultrealm`)
+   - Builds and pushes **AI Companion Bot Runner** (`hypertextassassin/vaultrealm-bot-runner` & `hypertextassassin/bot-runner`)
+   - Multi-platform support: `linux/amd64` and `linux/arm64`
+
+2. **GitHub Container Registry (GHCR)** ([`.github/workflows/docker-publish.yml`](../.github/workflows/docker-publish.yml)):
+   - Publishes `ghcr.io/hypertextassassinrajith/vaultrealm` and `ghcr.io/hypertextassassinrajith/vaultrealm-bot-runner`
+   - Generates provenance attestations
+
+**Triggers & Tags**:
+- **On push to `master`** → builds and pushes `:edge` and updates `:latest`
+- **On version tag `v*`** (e.g. `v0.1.0`) → builds and pushes semver tags (`0.1.0`, `0.1`, `latest`)
+- **On PRs to `master`** → builds images to validate compilation without pushing
+- Isolated GitHub Actions cache (`type=gha`) per component for fast builds
 
 ---
 

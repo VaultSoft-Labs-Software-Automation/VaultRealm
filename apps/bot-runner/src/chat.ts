@@ -80,7 +80,7 @@ export function handleFastCommand(
     };
   }
 
-  if (lower === '!stop' || lower === 'stop') {
+  if (lower === '!stop' || lower === 'stop' || lower === '!stop here' || lower === 'stop here') {
     return {
       isFastCommand: true,
       command: 'stop',
@@ -96,7 +96,12 @@ export function handleFastCommand(
     };
   }
 
-  if (lower === '!follow' || lower === 'follow') {
+  if (
+    lower === '!follow' ||
+    lower === 'follow' ||
+    lower === '!follow me' ||
+    lower === 'follow me'
+  ) {
     return {
       isFastCommand: true,
       command: 'follow',
@@ -104,7 +109,16 @@ export function handleFastCommand(
     };
   }
 
-  if (lower === '!come' || lower === 'come') {
+  if (
+    lower === '!come' ||
+    lower === 'come' ||
+    lower === '!come me' ||
+    lower === 'come me' ||
+    lower === '!come here' ||
+    lower === 'come here' ||
+    lower === '!come to me' ||
+    lower === 'come to me'
+  ) {
     return {
       isFastCommand: true,
       command: 'come',
@@ -112,7 +126,12 @@ export function handleFastCommand(
     };
   }
 
-  if (lower === '!stay' || lower === 'stay') {
+  if (
+    lower === '!stay' ||
+    lower === 'stay' ||
+    lower === '!stay here' ||
+    lower === 'stay here'
+  ) {
     return {
       isFastCommand: true,
       command: 'stay',

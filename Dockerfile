@@ -69,21 +69,29 @@ COPY apps/api/drizzle* apps/api/
 RUN mkdir -p /srv/vaultrealm/data
 VOLUME ["/srv/vaultrealm/data"]
 
+# Optional build arguments for baking in Google Drive OAuth credentials
+ARG GOOGLE_CLIENT_ID=""
+ARG GOOGLE_CLIENT_SECRET=""
+ARG CLIENT_ID=""
+ARG CLIENT_SECRET=""
+
 # Runtime environment defaults
 ENV NODE_ENV=production \
     PORT=3001 \
     DATA_DIR=/srv/vaultrealm/data \
-    LOG_LEVEL=info
+    LOG_LEVEL=info \
+    GOOGLE_CLIENT_ID=${GOOGLE_CLIENT_ID:-$CLIENT_ID} \
+    GOOGLE_CLIENT_SECRET=${GOOGLE_CLIENT_SECRET:-$CLIENT_SECRET}
 
 EXPOSE 3001
 
 # Health check
 HEALTHCHECK --interval=30s --timeout=5s --start-period=10s --retries=3 \
-  CMD wget -qO- http://localhost:3001/healthz || exit 1
+    CMD wget -qO- http://127.0.0.1:${PORT:-3001}/healthz || exit 1
 
 # Run the API server (serves frontend assets in production)
 CMD ["node", "apps/api/dist/index.js"]
 
 LABEL org.opencontainers.image.source="https://github.com/HypertextAssassinRajith/VaultRealm" \
-      org.opencontainers.image.description="VaultRealm — Self-hosted game server control panel" \
-      org.opencontainers.image.licenses="MIT"
+    org.opencontainers.image.description="VaultRealm — Self-hosted game server control panel" \
+    org.opencontainers.image.licenses="MIT"

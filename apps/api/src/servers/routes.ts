@@ -21,6 +21,7 @@ import {
   getAddonsFolder,
   detectServerGameVersion,
   saveUploadedMod,
+  getInstalledModpack,
 } from './mods.js';
 import {
   getServerPlayersData,
@@ -31,6 +32,12 @@ import {
   unbanIp,
   setPlayerOp,
 } from './players.js';
+import {
+  getServerPropertiesData,
+  updateServerProperty,
+  updateServerPropertiesBatch,
+  setServerWorldSpawn,
+} from './properties.js';
 import { writeAudit } from '../audit/log.js';
 import {
   startServer,
@@ -127,6 +134,28 @@ const unbanIpSchema = z.object({
 const setOpSchema = z.object({
   player: z.string().min(1, 'Player name is required').max(64),
   op: z.boolean(),
+});
+
+const updatePropertySchema = z.object({
+  key: z
+    .string()
+    .min(1, 'Property key is required')
+    .max(128, 'Property key is too long')
+    .regex(/^[a-zA-Z0-9_.-]+$/, 'Property key contains invalid characters'),
+  value: z.string().max(2048, 'Property value is too long'),
+});
+
+const updatePropertiesBatchSchema = z.object({
+  properties: z.record(z.string()).optional(),
+  rawContent: z.string().max(65536, 'Content exceeds maximum file size').optional(),
+});
+
+const setSpawnPointSchema = z.object({
+  x: z.number({ required_error: 'X coordinate is required' }),
+  y: z.number({ required_error: 'Y coordinate is required' }),
+  z: z.number({ required_error: 'Z coordinate is required' }),
+  angle: z.number().optional(),
+  spawnProtection: z.number().int().min(0).max(100000).optional(),
 });
 
 // ── Route registration ───────────────────────────────────────────────────────
@@ -438,10 +467,12 @@ export async function serverRoutes(app: FastifyInstance): Promise<void> {
     const folder = getAddonsFolder(detail.templateId);
     const detectedGameVersion = detectServerGameVersion(id, detail.templateId) || detail.version;
     const mods = await listInstalledMods(id, detail.templateId);
+    const modpack = getInstalledModpack(id);
     return {
       folder,
       detectedGameVersion,
       serverType: detail.serverType,
+      modpack,
       mods,
     };
   });
@@ -681,6 +712,95 @@ export async function serverRoutes(app: FastifyInstance): Promise<void> {
       target: id,
       ip: request.ip,
       data: { player: parsed.data.player, op: parsed.data.op },
+    });
+
+    return reply.status(200).send(res);
+  });
+
+  // ── GET /api/servers/:id/properties ────────────────────────────────────────
+  app.get('/api/servers/:id/properties', { preHandler: [requireAuth] }, async (request) => {
+    const user = getRequestUser(request);
+    const { id } = request.params as { id: string };
+    await assertCan(user, 'server:settings', id);
+
+    return getServerPropertiesData(id);
+  });
+
+  // ── POST /api/servers/:id/properties/property ──────────────────────────────
+  app.post('/api/servers/:id/properties/property', { preHandler: [requireAuth] }, async (request, reply) => {
+    const user = getRequestUser(request);
+    const { id } = request.params as { id: string };
+    await assertCan(user, 'server:settings', id);
+
+    const parsed = validate(updatePropertySchema, request.body, reply);
+    if (!parsed.success) return;
+
+    const res = await updateServerProperty(id, parsed.data.key, parsed.data.value);
+
+    writeAudit({
+      userId: user.id,
+      action: 'server.property.update',
+      target: id,
+      ip: request.ip,
+      data: { key: parsed.data.key, value: parsed.data.value },
+    });
+
+    return reply.status(200).send(res);
+  });
+
+  // ── PUT /api/servers/:id/properties ────────────────────────────────────────
+  app.put('/api/servers/:id/properties', { preHandler: [requireAuth] }, async (request, reply) => {
+    const user = getRequestUser(request);
+    const { id } = request.params as { id: string };
+    await assertCan(user, 'server:settings', id);
+
+    const parsed = validate(updatePropertiesBatchSchema, request.body, reply);
+    if (!parsed.success) return;
+
+    const res = await updateServerPropertiesBatch(id, parsed.data.properties, parsed.data.rawContent);
+
+    writeAudit({
+      userId: user.id,
+      action: 'server.properties.update',
+      target: id,
+      ip: request.ip,
+      data: { count: res.count },
+    });
+
+    return reply.status(200).send(res);
+  });
+
+  // ── POST /api/servers/:id/properties/spawn-point ───────────────────────────
+  app.post('/api/servers/:id/properties/spawn-point', { preHandler: [requireAuth] }, async (request, reply) => {
+    const user = getRequestUser(request);
+    const { id } = request.params as { id: string };
+    await assertCan(user, 'server:settings', id);
+
+    const parsed = validate(setSpawnPointSchema, request.body, reply);
+    if (!parsed.success) return;
+
+    const res = await setServerWorldSpawn(
+      id,
+      user.id,
+      parsed.data.x,
+      parsed.data.y,
+      parsed.data.z,
+      parsed.data.angle,
+      parsed.data.spawnProtection,
+    );
+
+    writeAudit({
+      userId: user.id,
+      action: 'server.spawn_point.set',
+      target: id,
+      ip: request.ip,
+      data: {
+        x: parsed.data.x,
+        y: parsed.data.y,
+        z: parsed.data.z,
+        angle: parsed.data.angle,
+        spawnProtection: parsed.data.spawnProtection,
+      },
     });
 
     return reply.status(200).send(res);

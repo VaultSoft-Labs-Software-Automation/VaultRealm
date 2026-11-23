@@ -164,6 +164,7 @@ describe('Phase 6a — AI Companion LLM Endpoints & Gateway', () => {
       const data = res.json();
       expect(data.presets.length).toBeGreaterThanOrEqual(5);
       expect(data.presets.some((p: { id: string }) => p.id === 'openai')).toBe(true);
+      expect(data.presets.some((p: { id: string; baseUrl: string; defaultModel: string }) => p.id === 'vercel' && p.baseUrl === 'https://ai-gateway.vercel.sh/v1' && p.defaultModel === 'openai/gpt-4o-mini')).toBe(true);
     });
 
     it('creates an endpoint and never exposes the raw API key', async () => {
@@ -189,6 +190,27 @@ describe('Phase 6a — AI Companion LLM Endpoints & Gateway', () => {
       expect(body.lastFour).toBe('****wxyz');
       expect(body.apiKey).toBeUndefined();
       expect(JSON.stringify(body)).not.toContain('abcdef1234567890');
+    });
+
+    it('creates a Vercel AI Gateway endpoint successfully', async () => {
+      const res = await app.inject({
+        method: 'POST',
+        url: '/api/llm-endpoints',
+        cookies: { vr_session: userCookie },
+        payload: {
+          name: 'Vercel AI Gateway',
+          baseUrl: 'https://ai-gateway.vercel.sh/v1',
+          apiKey: 'vcl_key_1234567890abcdef',
+          defaultModel: 'openai/gpt-4o-mini',
+        },
+      });
+
+      expect(res.statusCode).toBe(201);
+      const body = res.json();
+      expect(body.name).toBe('Vercel AI Gateway');
+      expect(body.baseUrl).toBe('https://ai-gateway.vercel.sh/v1');
+      expect(body.defaultModel).toBe('openai/gpt-4o-mini');
+      expect(body.lastFour).toBe('****cdef');
     });
 
     it('blocks SSRF on create for non-admin', async () => {

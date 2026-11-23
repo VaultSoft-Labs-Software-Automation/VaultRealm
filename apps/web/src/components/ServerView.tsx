@@ -13,6 +13,8 @@ import { CompanionTab } from './CompanionTab';
 import { ServerMetrics, type MetricSnapshot } from './ServerMetrics';
 import { ServerModsTab } from './ServerModsTab';
 import { ServerPlayersTab } from './ServerPlayersTab';
+import { ServerPropertiesTab } from './ServerPropertiesTab';
+import { ServerBackupsTab } from './ServerBackupsTab';
 
 interface ServerViewProps {
   serverId: string;
@@ -20,14 +22,14 @@ interface ServerViewProps {
   onDelete: () => void;
 }
 
-type ServerTab = 'overview' | 'console' | 'players' | 'mods' | 'debug' | 'companion' | 'settings';
+type ServerTab = 'overview' | 'console' | 'players' | 'mods' | 'properties' | 'backups' | 'debug' | 'companion' | 'settings';
 
 export function ServerView({ serverId, onBack, onDelete }: ServerViewProps) {
   const [server, setServer] = useState<ServerDetail | null>(null);
   const [activeTab, setActiveTab] = useState<ServerTab>(() => {
     try {
       const saved = sessionStorage.getItem(`vr_tab_${serverId}`);
-      if (saved && ['overview', 'console', 'players', 'mods', 'debug', 'companion', 'settings'].includes(saved)) {
+      if (saved && ['overview', 'console', 'players', 'mods', 'properties', 'backups', 'debug', 'companion', 'settings'].includes(saved)) {
         return saved as ServerTab;
       }
     } catch {
@@ -330,19 +332,19 @@ export function ServerView({ serverId, onBack, onDelete }: ServerViewProps) {
     <>
     <div className="space-y-6 animate-fade-in">
       {/* Top Navigation & Status */}
-      <div className="flex flex-col md:flex-row md:items-center justify-between gap-4 border-b border-border pb-5">
-        <div className="flex items-center gap-3">
+      <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 sm:gap-4 border-b border-border pb-4 sm:pb-5">
+        <div className="flex items-start gap-2.5 sm:gap-3 min-w-0">
           <button
             onClick={onBack}
-            className="btn btn-secondary btn-sm"
+            className="btn btn-secondary btn-sm shrink-0 mt-0.5"
           >
             ← Back
           </button>
-          <div>
-            <div className="flex items-center gap-2.5">
-              <h1 className="text-xl font-bold text-foreground tracking-tight">{server.name}</h1>
+          <div className="min-w-0 flex-1">
+            <div className="flex items-center gap-2 sm:gap-2.5 flex-wrap">
+              <h1 className="text-lg sm:text-xl font-bold text-foreground tracking-tight truncate">{server.name}</h1>
               <span
-                className={`badge ${
+                className={`badge shrink-0 ${
                   server.status === 'running'
                     ? 'badge-success'
                     : server.status === 'starting' || server.status === 'pulling'
@@ -364,41 +366,41 @@ export function ServerView({ serverId, onBack, onDelete }: ServerViewProps) {
                 {server.status}
               </span>
             </div>
-            <div className="flex items-center gap-2 mt-1 flex-wrap">
-              <span className="badge badge-primary text-[10px] py-0 px-2">{server.templateName}</span>
+            <div className="flex items-center gap-1.5 sm:gap-2 mt-1 flex-wrap">
+              <span className="badge badge-primary text-[10px] py-0 px-1.5 sm:px-2">{server.templateName}</span>
               {server.serverType && (
-                <span className="badge badge-info text-[10px] py-0 px-2 font-mono font-bold">
+                <span className="badge badge-info text-[10px] py-0 px-1.5 sm:px-2 font-mono font-bold">
                   ⚡ {server.serverType}
                 </span>
               )}
               {server.version && (
-                <span className="badge badge-neutral text-[10px] py-0 px-2 font-mono font-bold text-violet-300 border-violet-500/30 bg-violet-950/30">
+                <span className="badge badge-neutral text-[10px] py-0 px-1.5 sm:px-2 font-mono font-bold text-violet-300 border-violet-500/30 bg-violet-950/30">
                   🏷️ {server.version === 'LATEST' ? 'LATEST' : server.version.startsWith('v') ? server.version : `v${server.version}`}
                 </span>
               )}
-              <span className="text-xs text-muted-foreground">•</span>
-              <span className="text-xs text-muted-foreground">Connect:</span>
+              <span className="text-xs text-muted-foreground hidden xs:inline">•</span>
+              <span className="text-xs text-muted-foreground hidden xs:inline">Connect:</span>
               <button
                 onClick={() => {
                   navigator.clipboard.writeText(joinAddress);
                   addToast({ type: 'info', title: 'Address copied to clipboard' });
                 }}
-                className="font-mono text-xs text-primary hover:underline cursor-pointer bg-card-subtle px-2 py-0.5 rounded border border-border/60 flex items-center gap-1"
+                className="font-mono text-xs text-primary hover:underline cursor-pointer bg-card-subtle px-2 py-0.5 rounded border border-border/60 flex items-center gap-1 max-w-[200px] sm:max-w-none truncate"
                 title="Click to copy address"
               >
-                <span>{joinAddress}</span>
-                <span className="text-[10px]">📋</span>
+                <span className="truncate">{joinAddress}</span>
+                <span className="text-[10px] shrink-0">📋</span>
               </button>
             </div>
           </div>
         </div>
 
         {/* Quick Power Actions */}
-        <div className="flex items-center gap-2">
+        <div className="grid grid-cols-3 sm:flex sm:items-center gap-1.5 sm:gap-2 w-full sm:w-auto shrink-0">
           {server.status === 'pulling' || server.status === 'creating' || server.status === 'starting' ? (
             <button
               disabled
-              className="btn btn-primary btn-sm opacity-80 cursor-not-allowed flex items-center gap-1.5"
+              className="col-span-3 btn btn-primary btn-sm opacity-80 cursor-not-allowed flex items-center justify-center gap-1.5 w-full sm:w-auto"
             >
               <span className="inline-block animate-spin text-xs">⟳</span>
               <span className="capitalize">{server.status}...</span>
@@ -407,7 +409,7 @@ export function ServerView({ serverId, onBack, onDelete }: ServerViewProps) {
             <button
               onClick={() => handlePowerAction('start')}
               disabled={loadingAction === 'start' || server.status === 'stopping'}
-              className="btn btn-primary btn-sm"
+              className="col-span-3 btn btn-primary btn-sm w-full sm:w-auto py-2 sm:py-1.5 font-bold"
             >
               ▶ Start Server
             </button>
@@ -416,21 +418,21 @@ export function ServerView({ serverId, onBack, onDelete }: ServerViewProps) {
               <button
                 onClick={() => handlePowerAction('restart')}
                 disabled={loadingAction === 'restart'}
-                className="btn btn-secondary btn-sm"
+                className="btn btn-secondary btn-sm py-2 sm:py-1.5"
               >
                 🔄 Restart
               </button>
               <button
                 onClick={() => handlePowerAction('stop')}
                 disabled={loadingAction === 'stop'}
-                className="btn btn-secondary btn-sm text-amber-400 hover:text-amber-300 border-amber-500/30"
+                className="btn btn-secondary btn-sm text-amber-400 hover:text-amber-300 border-amber-500/30 py-2 sm:py-1.5"
               >
                 ⏹ Stop
               </button>
               <button
                 onClick={() => handlePowerAction('kill')}
                 disabled={loadingAction === 'kill'}
-                className="btn btn-danger btn-sm"
+                className="btn btn-danger btn-sm py-2 sm:py-1.5"
               >
                 ⚠️ Kill
               </button>
@@ -440,20 +442,22 @@ export function ServerView({ serverId, onBack, onDelete }: ServerViewProps) {
       </div>
 
       {/* Tabs Strip */}
-      <div className="flex border-b border-border gap-1 overflow-x-auto">
+      <div className="flex border-b border-border gap-1 overflow-x-auto no-scrollbar touch-scroll -mx-3 px-3 sm:mx-0 sm:px-0">
         {[
           { id: 'overview', label: 'Overview', icon: '📊' },
           { id: 'console', label: 'Live Console', icon: '💻' },
           { id: 'players', label: 'Players & Bans', icon: '👥' },
           { id: 'mods', label: 'Mods & Addons', icon: '🧩' },
+          { id: 'properties', label: 'Properties', icon: '⚙️' },
+          { id: 'backups', label: 'Backups', icon: '💾' },
           { id: 'debug', label: 'Auto-Diagnosis', icon: '🔍' },
           { id: 'companion', label: 'AI Companion', icon: '🤖' },
-          { id: 'settings', label: 'Settings', icon: '⚙️' },
+          { id: 'settings', label: 'Settings', icon: '🔧' },
         ].map((tab) => (
           <button
             key={tab.id}
-            onClick={() => setActiveTab(tab.id as 'overview' | 'console' | 'players' | 'mods' | 'debug' | 'companion' | 'settings')}
-            className={`py-2 px-4 text-xs font-semibold rounded-t-lg transition-all cursor-pointer flex items-center gap-2 border-b-2 -mb-px ${
+            onClick={() => setActiveTab(tab.id as ServerTab)}
+            className={`py-2 px-3 sm:px-4 text-xs font-semibold rounded-t-lg transition-all cursor-pointer flex items-center gap-1.5 sm:gap-2 border-b-2 -mb-px shrink-0 whitespace-nowrap ${
               activeTab === tab.id
                 ? 'border-primary text-primary bg-primary/10'
                 : 'border-transparent text-muted-foreground hover:text-foreground hover:bg-muted/50'
@@ -482,17 +486,19 @@ export function ServerView({ serverId, onBack, onDelete }: ServerViewProps) {
 
       {/* Tab: Console */}
       {activeTab === 'console' && (
-        <div className="card overflow-hidden flex flex-col h-[540px] bg-black/95 shadow-xl relative">
-          <div className="px-4 py-3 bg-card-subtle border-b border-border flex items-center justify-between text-xs text-muted-foreground">
-            <div className="flex items-center gap-2">
-              <span className="flex gap-1.5">
+        <div className="card overflow-hidden flex flex-col h-[65vh] min-h-[400px] max-h-[600px] sm:h-[540px] bg-black/95 shadow-xl relative">
+          <div className="px-3 sm:px-4 py-2.5 sm:py-3 bg-card-subtle border-b border-border flex items-center justify-between text-xs text-muted-foreground gap-2">
+            <div className="flex items-center gap-2 min-w-0">
+              <span className="flex gap-1.5 shrink-0">
                 <span className="h-2.5 w-2.5 rounded-full bg-red-500/80 inline-block" />
                 <span className="h-2.5 w-2.5 rounded-full bg-amber-500/80 inline-block" />
                 <span className="h-2.5 w-2.5 rounded-full bg-emerald-500/80 inline-block" />
               </span>
-              <span className="font-mono text-[11px] text-muted-foreground ml-2">Live Terminal • {server.name}</span>
+              <span className="font-mono text-[11px] text-muted-foreground ml-1 sm:ml-2 truncate max-w-[110px] xs:max-w-[160px] sm:max-w-none">
+                Live Terminal • {server.name}
+              </span>
             </div>
-            <div className="flex items-center gap-2">
+            <div className="flex items-center gap-1.5 sm:gap-2 shrink-0">
               <button
                 type="button"
                 onClick={() => {
@@ -500,7 +506,7 @@ export function ServerView({ serverId, onBack, onDelete }: ServerViewProps) {
                   setAutoScroll(next);
                   if (next) scrollToBottom('auto');
                 }}
-                className={`btn btn-sm text-[11px] py-1 px-2.5 transition-colors flex items-center gap-1.5 ${
+                className={`btn btn-sm text-[10px] sm:text-[11px] py-1 px-2 sm:px-2.5 transition-colors flex items-center gap-1 sm:gap-1.5 ${
                   autoScroll
                     ? 'text-emerald-400 bg-emerald-950/40 border border-emerald-500/30'
                     : 'text-amber-400 bg-amber-950/40 border border-amber-500/30'
@@ -508,20 +514,21 @@ export function ServerView({ serverId, onBack, onDelete }: ServerViewProps) {
                 title={autoScroll ? 'Auto-scroll is active (click to pause)' : 'Auto-scroll paused (click to resume)'}
               >
                 <span className={`inline-block w-1.5 h-1.5 rounded-full ${autoScroll ? 'bg-emerald-400 animate-pulse' : 'bg-amber-400'}`} />
-                <span>{autoScroll ? 'Auto-scroll: ON' : 'Auto-scroll: PAUSED'}</span>
+                <span className="hidden sm:inline">{autoScroll ? 'Auto-scroll: ON' : 'Auto-scroll: PAUSED'}</span>
+                <span className="sm:hidden">{autoScroll ? 'Scroll: ON' : 'Paused'}</span>
               </button>
               <button
                 onClick={() => setConsoleLogs([])}
-                className="btn btn-ghost btn-sm text-[11px] py-1 px-2"
+                className="btn btn-ghost btn-sm text-[10px] sm:text-[11px] py-1 px-1.5 sm:px-2"
               >
-                Clear Buffer
+                Clear
               </button>
             </div>
           </div>
           <div
             ref={consoleContainerRef}
             onScroll={handleConsoleScroll}
-            className="flex-1 p-4 font-mono text-xs overflow-y-auto space-y-1 relative"
+            className="flex-1 p-3 sm:p-4 font-mono text-xs overflow-y-auto space-y-1 relative"
           >
             {consoleLogs.length === 0 ? (
               server.status === 'pulling' ? (
@@ -615,6 +622,14 @@ export function ServerView({ serverId, onBack, onDelete }: ServerViewProps) {
       {/* Tab: Mods & Addons */}
       {activeTab === 'mods' && (
         <ServerModsTab
+          server={server}
+          onRestartServer={() => handlePowerAction('restart')}
+        />
+      )}
+
+      {/* Tab: Properties */}
+      {activeTab === 'properties' && (
+        <ServerPropertiesTab
           server={server}
           onRestartServer={() => handlePowerAction('restart')}
         />
@@ -738,9 +753,33 @@ export function ServerView({ serverId, onBack, onDelete }: ServerViewProps) {
         <CompanionTab serverId={serverId} />
       )}
 
+      {/* Tab: Backups */}
+      {activeTab === 'backups' && (
+        <ServerBackupsTab
+          serverId={serverId}
+          serverStatus={server.status}
+          isMinecraft={server.templateId.includes('minecraft')}
+        />
+      )}
+
       {/* Tab: Settings */}
       {activeTab === 'settings' && (
         <div className="space-y-6">
+          <div className="card p-6 border border-border/80 flex items-center justify-between gap-4">
+            <div>
+              <h3 className="font-bold text-base text-foreground">Minecraft Server Properties</h3>
+              <p className="text-xs text-muted-foreground mt-0.5">
+                Customize online-mode, world spawn point, PvP, difficulty, view distance, and gameplay rules one by one.
+              </p>
+            </div>
+            <button
+              onClick={() => setActiveTab('properties')}
+              className="btn btn-secondary text-xs py-2 px-4 font-semibold shrink-0"
+            >
+              Open Server Properties →
+            </button>
+          </div>
+
           <div className="card p-6 border border-border/80 space-y-4">
             <h3 className="font-bold text-base text-foreground">Server Specifications</h3>
             <div className="grid grid-cols-2 sm:grid-cols-4 gap-4 text-xs">

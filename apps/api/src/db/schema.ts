@@ -174,6 +174,20 @@ export const backups = sqliteTable('backups', {
   kind: text('kind', { enum: ['manual', 'scheduled'] })
     .notNull()
     .default('manual'),
+  name: text('name'),
+  gdriveFileId: text('gdrive_file_id'),
+  gdriveWebLink: text('gdrive_web_link'),
+});
+
+// ──────────────────────────────────────────────────────────────────────────────
+// System Settings (key-value store for global configs like Google Drive OAuth)
+// ──────────────────────────────────────────────────────────────────────────────
+export const systemSettings = sqliteTable('system_settings', {
+  key: text('key').primaryKey(),
+  valueJson: text('value_json').notNull(),
+  updatedAt: text('updated_at')
+    .notNull()
+    .default(sql`(datetime('now'))`),
 });
 
 // ──────────────────────────────────────────────────────────────────────────────

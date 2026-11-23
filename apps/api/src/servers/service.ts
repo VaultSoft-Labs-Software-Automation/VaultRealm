@@ -8,7 +8,21 @@
 import { eq } from 'drizzle-orm';
 import { nanoid } from 'nanoid';
 import { getDatabase } from '../db/index.js';
-import { servers, serverPorts, events, serverMembers, diagnoses } from '../db/schema.js';
+import fs from 'node:fs';
+import {
+  servers,
+  serverPorts,
+  events,
+  serverMembers,
+  diagnoses,
+  backups,
+  bots,
+  botUsage,
+  botMemory,
+  botTraces,
+  botPlayers,
+} from '../db/schema.js';
+import { getServerDataDir } from './volume.js';
 import { getConfig } from '../config.js';
 import type { DockerDriver } from '../docker/driver.js';
 import { getTemplate, calculateMinecraftHeapMb } from './templates.js';
@@ -418,7 +432,24 @@ export async function deleteServer(serverId: string, userId: string, ip?: string
   const server = db.select().from(servers).where(eq(servers.id, serverId)).all()[0];
   if (!server) throw makeError(404, 'NOT_FOUND', 'Server not found.');
 
-  // Stop and remove container if it exists
+  // 1. Clean up companion bot container if it exists
+  const companionBots = db.select().from(bots).where(eq(bots.serverId, serverId)).all();
+  for (const companionBot of companionBots) {
+    if (companionBot.containerId) {
+      try {
+        await driver.stopContainer(companionBot.containerId, 5);
+      } catch {
+        // may already be stopped
+      }
+      try {
+        await driver.removeContainer(companionBot.containerId, false);
+      } catch {
+        // may already be removed
+      }
+    }
+  }
+
+  // 2. Stop and remove container if it exists
   if (server.containerId) {
     try {
       await driver.stopContainer(server.containerId, 10);
@@ -432,12 +463,32 @@ export async function deleteServer(serverId: string, userId: string, ip?: string
     }
   }
 
-  // Delete child records first to respect FK constraints
-  db.delete(diagnoses).where(eq(diagnoses.serverId, serverId)).run();
-  db.delete(events).where(eq(events.serverId, serverId)).run();
-  db.delete(serverMembers).where(eq(serverMembers.serverId, serverId)).run();
-  db.delete(serverPorts).where(eq(serverPorts.serverId, serverId)).run();
-  db.delete(servers).where(eq(servers.id, serverId)).run();
+  // 3. Delete child records first in a transaction to respect FK constraints
+  db.transaction((tx) => {
+    for (const companionBot of companionBots) {
+      tx.delete(botUsage).where(eq(botUsage.botId, companionBot.id)).run();
+      tx.delete(botMemory).where(eq(botMemory.botId, companionBot.id)).run();
+      tx.delete(botTraces).where(eq(botTraces.botId, companionBot.id)).run();
+      tx.delete(botPlayers).where(eq(botPlayers.botId, companionBot.id)).run();
+      tx.delete(bots).where(eq(bots.id, companionBot.id)).run();
+    }
+    tx.delete(diagnoses).where(eq(diagnoses.serverId, serverId)).run();
+    tx.delete(events).where(eq(events.serverId, serverId)).run();
+    tx.delete(backups).where(eq(backups.serverId, serverId)).run();
+    tx.delete(serverMembers).where(eq(serverMembers.serverId, serverId)).run();
+    tx.delete(serverPorts).where(eq(serverPorts.serverId, serverId)).run();
+    tx.delete(servers).where(eq(servers.id, serverId)).run();
+  });
+
+  // 4. Purge persistent storage volume directory
+  try {
+    const serverDir = getServerDataDir(serverId);
+    if (fs.existsSync(serverDir)) {
+      fs.rmSync(serverDir, { recursive: true, force: true });
+    }
+  } catch (err) {
+    console.warn(`[volume] Failed to purge server volume for ${serverId}:`, err);
+  }
 
   writeAudit({ userId, action: 'server.delete', target: serverId, ip });
 }

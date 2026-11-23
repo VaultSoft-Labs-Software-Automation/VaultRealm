@@ -27,6 +27,7 @@ interface MockContainer {
 }
 
 export class MockDockerDriver implements DockerDriver {
+  readonly isMock = true;
   /** All containers managed by this mock. */
   readonly containers = new Map<string, MockContainer>();
 
@@ -251,7 +252,11 @@ export class MockDockerDriver implements DockerDriver {
           maximumRetryCount: 0,
         },
       },
-      networkSettings: { ports },
+      networkSettings: {
+        ports,
+        ipAddress: '172.17.0.2',
+        gateway: '172.17.0.1',
+      },
       mounts: container.config.volumes.map((v) => ({
         source: v.hostPath,
         destination: v.containerPath,

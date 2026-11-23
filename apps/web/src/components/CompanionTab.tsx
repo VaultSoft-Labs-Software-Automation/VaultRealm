@@ -1,4 +1,4 @@
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useRef } from 'react';
 import {
   api,
   type LlmEndpoint,
@@ -37,15 +37,47 @@ export function CompanionTab({ serverId }: CompanionTabProps) {
   const [botModel, setBotModel] = useState('');
   const [botMode, setBotMode] = useState<'off' | 'manual' | 'auto-solo' | 'always'>('manual');
   const [botAuthMode, setBotAuthMode] = useState<'offline' | 'microsoft' | 'proxy'>('offline');
-  const [botBudget, setBotBudget] = useState(200000);
+  const [botBudget, setBotBudget] = useState<number | ''>(200000);
   const [botRpm, setBotRpm] = useState(10);
+  const [botWhoCanCommand, setBotWhoCanCommand] = useState<'everyone' | 'trusted' | 'owner_only'>('everyone');
+  const [botOwnerPlayerName, setBotOwnerPlayerName] = useState('');
+  const [botTrustedPlayers, setBotTrustedPlayers] = useState('');
   const [savingBot, setSavingBot] = useState(false);
   const [spawningBot, setSpawningBot] = useState(false);
   const [actionLoading, setActionLoading] = useState<string | null>(null);
   const [sayInput, setSayInput] = useState('');
 
   // Phase 6d sub-tabs & traces & device-code state
-  const [activeSubTab, setActiveSubTab] = useState<'control' | 'usage' | 'traces' | 'endpoints'>('control');
+  const [activeSubTab, setActiveSubTab] = useState<'control' | 'usage' | 'traces' | 'endpoints' | 'logs'>('control');
+  const [botLogs, setBotLogs] = useState<string[]>([]);
+  const [loadingLogs, setLoadingLogs] = useState(false);
+  const [autoScrollLogs, setAutoScrollLogs] = useState(true);
+  const botLogsContainerRef = useRef<HTMLDivElement>(null);
+
+  const fetchBotLogs = async () => {
+    try {
+      setLoadingLogs(true);
+      const res = await api.getBotLogs(serverId, 300);
+      setBotLogs(res.logs || []);
+    } catch {
+      // ignore
+    } finally {
+      setLoadingLogs(false);
+    }
+  };
+
+  useEffect(() => {
+    if (activeSubTab !== 'logs') return;
+    void fetchBotLogs();
+    const interval = setInterval(fetchBotLogs, 2000);
+    return () => clearInterval(interval);
+  }, [activeSubTab, serverId]);
+
+  useEffect(() => {
+    if (autoScrollLogs && botLogsContainerRef.current) {
+      botLogsContainerRef.current.scrollTop = botLogsContainerRef.current.scrollHeight;
+    }
+  }, [botLogs, autoScrollLogs]);
   const [traces, setTraces] = useState<CompanionTrace[]>([]);
   const [loadingTraces, setLoadingTraces] = useState(false);
   const [expandedTraceId, setExpandedTraceId] = useState<string | null>(null);
@@ -97,6 +129,17 @@ export function CompanionTab({ serverId }: CompanionTabProps) {
         setBotAuthMode(botRes.bot.authMode);
         setBotBudget(botRes.bot.dailyTokenBudget);
         setBotRpm(botRes.bot.rpmLimit);
+        setBotWhoCanCommand(
+          botRes.bot.whoCanCommand === 'owner' || botRes.bot.whoCanCommand === 'owner_only'
+            ? 'owner_only'
+            : botRes.bot.whoCanCommand === 'trusted'
+              ? 'trusted'
+              : 'everyone',
+        );
+        setBotOwnerPlayerName(botRes.bot.ownerPlayerName ?? '');
+        setBotTrustedPlayers(
+          Array.isArray(botRes.bot.trustedPlayers) ? botRes.bot.trustedPlayers.join(', ') : '',
+        );
       } else if (endpointsRes.endpoints.length > 0 && !botEndpointId) {
         setBotEndpointId(endpointsRes.endpoints[0].id);
       }
@@ -238,7 +281,13 @@ export function CompanionTab({ serverId }: CompanionTabProps) {
         model: botModel.trim() || null,
         mode: botMode,
         authMode: botAuthMode,
-        dailyTokenBudget: botBudget,
+        whoCanCommand: botWhoCanCommand,
+        ownerPlayerName: botOwnerPlayerName.trim() || undefined,
+        trustedPlayers: botTrustedPlayers
+          .split(',')
+          .map((p) => p.trim())
+          .filter(Boolean),
+        dailyTokenBudget: typeof botBudget === 'number' ? Math.max(1000, botBudget) : (parseInt(String(botBudget), 10) || 200000),
         rpmLimit: botRpm,
       });
       addToast({ type: 'success', title: 'Companion configured successfully!' });
@@ -255,8 +304,17 @@ export function CompanionTab({ serverId }: CompanionTabProps) {
     if (!bot || bot.status === 'offline' || bot.status === 'error') {
       try {
         setSpawningBot(true);
-        await api.spawnBot(serverId);
-        addToast({ type: 'success', title: 'Spawning Companion...', message: 'Bot container started and joining game.' });
+        addToast({
+          type: 'info',
+          title: 'Preparing Companion...',
+          message: 'Pulling bot container image and launching runner...',
+        });
+        await api.spawnBot(serverId, true);
+        addToast({
+          type: 'success',
+          title: 'Companion Spawned!',
+          message: 'Bot container started and joining game server.',
+        });
         fetchData();
       } catch (err: unknown) {
         const error = err as ApiError;
@@ -449,19 +507,38 @@ export function CompanionTab({ serverId }: CompanionTabProps) {
       </div>
 
       {/* ── Sub-Navigation Tabs ── */}
-      <div style={{ display: 'flex', gap: '8px', borderBottom: '1px solid rgba(255, 255, 255, 0.08)', paddingBottom: '12px', flexWrap: 'wrap' }}>
+      <div className="no-scrollbar touch-scroll" style={{ display: 'flex', gap: '8px', borderBottom: '1px solid rgba(255, 255, 255, 0.08)', paddingBottom: '12px', overflowX: 'auto', whiteSpace: 'nowrap' }}>
+        {bot?.errorMessage && (
+          <div style={{ padding: '10px 14px', borderRadius: '8px', background: 'rgba(239, 68, 68, 0.1)', border: '1px solid rgba(239, 68, 68, 0.3)', display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: '12px', marginBottom: '12px', flexWrap: 'wrap' }}>
+            <div style={{ fontSize: '0.8125rem', color: '#fca5a5' }}>
+              <strong>Companion Status:</strong> {bot.errorMessage}
+            </div>
+            <button
+              type="button"
+              onClick={() => {
+                setActiveSubTab('logs');
+                void fetchBotLogs();
+              }}
+              style={{ padding: '4px 10px', fontSize: '0.75rem', fontWeight: 600, background: 'rgba(239, 68, 68, 0.2)', border: '1px solid rgba(239, 68, 68, 0.4)', borderRadius: '6px', color: '#fee2e2', cursor: 'pointer', whiteSpace: 'nowrap' }}
+            >
+              View Bot Logs 📜
+            </button>
+          </div>
+        )}
         {[
           { id: 'control', label: '🎮 Controls & Setup' },
           { id: 'usage', label: '📊 Usage & Budget' },
           { id: 'traces', label: '🔍 Activity & Traces' },
+          { id: 'logs', label: `📜 Bot Live Logs${bot?.status === 'error' ? ' ⚠️' : ''}` },
           { id: 'endpoints', label: `⚡ AI Endpoints (${endpoints.length})` },
         ].map((tab) => (
           <button
             key={tab.id}
             type="button"
             onClick={() => {
-              setActiveSubTab(tab.id as 'control' | 'usage' | 'traces' | 'endpoints');
+              setActiveSubTab(tab.id as 'control' | 'usage' | 'traces' | 'endpoints' | 'logs');
               if (tab.id === 'traces') loadTraces();
+              if (tab.id === 'logs') void fetchBotLogs();
             }}
             style={{
               background: activeSubTab === tab.id ? 'rgba(99, 102, 241, 0.2)' : 'transparent',
@@ -527,7 +604,7 @@ export function CompanionTab({ serverId }: CompanionTabProps) {
               opacity: spawningBot || !bot ? 0.6 : 1,
             }}
           >
-            {spawningBot ? '⏳ Processing...' : isBotActive ? '⏹ Despawn Bot' : '🚀 Spawn Bot into Server'}
+            {spawningBot ? '⏳ Pulling & Starting Bot...' : isBotActive ? '⏹ Despawn Bot' : '🚀 Spawn Bot into Server'}
           </button>
         </div>
 
@@ -784,16 +861,36 @@ export function CompanionTab({ serverId }: CompanionTabProps) {
             </div>
 
             <div>
-              <label style={{ display: 'block', fontSize: '0.8rem', color: '#94a3b8', marginBottom: '6px' }}>
-                Daily Token Budget
-              </label>
+              <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '6px' }}>
+                <label style={{ fontSize: '0.8rem', color: '#94a3b8' }}>
+                  Daily Token Budget
+                </label>
+                <span style={{ fontSize: '0.75rem', color: '#818cf8', fontFamily: 'monospace' }}>
+                  {typeof botBudget === 'number' ? botBudget.toLocaleString() : '0'} tokens
+                </span>
+              </div>
               <input
                 type="number"
                 min="1000"
-                max="5000000"
-                step="5000"
+                max="10000000"
+                step="any"
                 value={botBudget}
-                onChange={(e) => setBotBudget(parseInt(e.target.value, 10) || 200000)}
+                onChange={(e) => {
+                  const val = e.target.value;
+                  if (val === '') {
+                    setBotBudget('');
+                  } else {
+                    const parsed = parseInt(val, 10);
+                    setBotBudget(isNaN(parsed) ? '' : parsed);
+                  }
+                }}
+                onBlur={() => {
+                  if (botBudget === '' || botBudget < 1000) {
+                    setBotBudget(1000);
+                  } else if (botBudget > 10000000) {
+                    setBotBudget(10000000);
+                  }
+                }}
                 style={{
                   width: '100%',
                   padding: '9px 12px',
@@ -802,8 +899,130 @@ export function CompanionTab({ serverId }: CompanionTabProps) {
                   border: '1px solid rgba(255, 255, 255, 0.12)',
                   color: '#f8fafc',
                   fontSize: '0.875rem',
+                  fontFamily: 'monospace',
                 }}
+                placeholder="200000"
               />
+              <div style={{ display: 'flex', gap: '6px', marginTop: '6px', flexWrap: 'wrap' }}>
+                {[
+                  { label: '50k', val: 50000 },
+                  { label: '100k', val: 100000 },
+                  { label: '200k (Default)', val: 200000 },
+                  { label: '500k', val: 500000 },
+                  { label: '1M', val: 1000000 },
+                ].map((preset) => (
+                  <button
+                    key={preset.val}
+                    type="button"
+                    onClick={() => setBotBudget(preset.val)}
+                    style={{
+                      background: botBudget === preset.val ? 'rgba(99, 102, 241, 0.25)' : 'rgba(15, 23, 42, 0.4)',
+                      border: botBudget === preset.val ? '1px solid #6366f1' : '1px solid rgba(255, 255, 255, 0.08)',
+                      color: botBudget === preset.val ? '#818cf8' : '#94a3b8',
+                      fontSize: '0.7rem',
+                      padding: '2px 8px',
+                      borderRadius: '4px',
+                      cursor: 'pointer',
+                      transition: 'all 0.2s',
+                    }}
+                  >
+                    {preset.label}
+                  </button>
+                ))}
+              </div>
+            </div>
+          </div>
+
+          {/* Permissions & In-Game Command Policy */}
+          <div
+            style={{
+              padding: '16px',
+              borderRadius: '10px',
+              background: 'rgba(15, 23, 42, 0.4)',
+              border: '1px solid rgba(255, 255, 255, 0.08)',
+              display: 'flex',
+              flexDirection: 'column',
+              gap: '14px',
+            }}
+          >
+            <div style={{ fontSize: '0.875rem', fontWeight: 600, color: '#f8fafc' }}>
+              🛡️ In-Game Permissions & Player Roles
+            </div>
+
+            <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(220px, 1fr))', gap: '14px' }}>
+              <div>
+                <label style={{ display: 'block', fontSize: '0.8rem', color: '#94a3b8', marginBottom: '6px' }}>
+                  Who Can Command Buddy
+                </label>
+                <select
+                  value={botWhoCanCommand}
+                  onChange={(e) => setBotWhoCanCommand(e.target.value as 'everyone' | 'trusted' | 'owner_only')}
+                  style={{
+                    width: '100%',
+                    padding: '9px 12px',
+                    borderRadius: '8px',
+                    background: 'rgba(15, 23, 42, 0.6)',
+                    border: '1px solid rgba(255, 255, 255, 0.12)',
+                    color: '#f8fafc',
+                    fontSize: '0.875rem',
+                  }}
+                >
+                  <option value="everyone">Everyone (All players can chat & give movement commands)</option>
+                  <option value="trusted">Trusted Players Only (Owner + Trusted list)</option>
+                  <option value="owner_only">Owner Only (Only server owner)</option>
+                </select>
+                <div style={{ fontSize: '0.72rem', color: '#64748b', marginTop: '4px' }}>
+                  Guests can use friendly skills (follow, come, stay). Mining and advanced tasks always require trusted/owner.
+                </div>
+              </div>
+
+              <div>
+                <label style={{ display: 'block', fontSize: '0.8rem', color: '#94a3b8', marginBottom: '6px' }}>
+                  In-Game Owner (Minecraft Username)
+                </label>
+                <input
+                  type="text"
+                  value={botOwnerPlayerName}
+                  onChange={(e) => setBotOwnerPlayerName(e.target.value)}
+                  placeholder="e.g. BugFire"
+                  style={{
+                    width: '100%',
+                    padding: '9px 12px',
+                    borderRadius: '8px',
+                    background: 'rgba(15, 23, 42, 0.6)',
+                    border: '1px solid rgba(255, 255, 255, 0.12)',
+                    color: '#f8fafc',
+                    fontSize: '0.875rem',
+                  }}
+                />
+                <div style={{ fontSize: '0.72rem', color: '#64748b', marginTop: '4px' }}>
+                  Your in-game player name. If empty, automatically inherits from server operators (ops.json).
+                </div>
+              </div>
+
+              <div>
+                <label style={{ display: 'block', fontSize: '0.8rem', color: '#94a3b8', marginBottom: '6px' }}>
+                  Trusted Players (Optional)
+                </label>
+                <input
+                  type="text"
+                  value={botTrustedPlayers}
+                  onChange={(e) => setBotTrustedPlayers(e.target.value)}
+                  placeholder="e.g. Steve, Alex"
+                  style={{
+                    width: '100%',
+                    padding: '9px 12px',
+                    borderRadius: '8px',
+                    background: 'rgba(15, 23, 42, 0.6)',
+                    border: '1px solid rgba(255, 255, 255, 0.12)',
+                    color: '#f8fafc',
+                    fontSize: '0.875rem',
+                  }}
+                />
+                <div style={{ fontSize: '0.72rem', color: '#64748b', marginTop: '4px' }}>
+                  Comma-separated usernames allowed to assign resource mining, crafting, and tasks.
+                </div>
+              </div>
             </div>
           </div>
 
@@ -1093,7 +1312,7 @@ export function CompanionTab({ serverId }: CompanionTabProps) {
               <div style={{ fontSize: '32px', marginBottom: '8px' }}>⚡</div>
               <div style={{ fontWeight: 600, color: '#e2e8f0', marginBottom: '4px' }}>No Endpoints Configured</div>
               <div style={{ fontSize: '0.85rem' }}>
-                Use the form on the right to connect an OpenAI, OpenRouter, Groq, or local Ollama endpoint.
+                Use the form on the right to connect an OpenAI, OpenRouter, Vercel AI Gateway, Groq, or local Ollama endpoint.
               </div>
             </div>
           ) : (
@@ -1143,6 +1362,22 @@ export function CompanionTab({ serverId }: CompanionTabProps) {
                             }}
                           >
                             📝 JSON Mode
+                          </span>
+                        )}
+                        {ep.keyDecryptionFailed && (
+                          <span
+                            title="The stored API key cannot be decrypted (the encryption secret changed). Click Edit (✏️) and re-enter your API key to restore functionality."
+                            style={{
+                              fontSize: '0.7rem',
+                              padding: '2px 7px',
+                              borderRadius: '10px',
+                              background: 'rgba(239, 68, 68, 0.2)',
+                              color: '#f87171',
+                              border: '1px solid rgba(239, 68, 68, 0.4)',
+                              fontWeight: 600,
+                            }}
+                          >
+                            ⚠️ Re-enter Key
                           </span>
                         )}
                       </div>
@@ -1300,6 +1535,23 @@ export function CompanionTab({ serverId }: CompanionTabProps) {
           <h3 style={{ margin: '0 0 16px', fontSize: '1.05rem', fontWeight: 600, color: '#f8fafc' }}>
             {editingId ? 'Edit LLM Endpoint' : 'Connect New AI Provider'}
           </h3>
+
+          {editingId && endpoints.find((e) => e.id === editingId)?.keyDecryptionFailed && (
+            <div
+              style={{
+                marginBottom: '16px',
+                padding: '12px 14px',
+                borderRadius: '8px',
+                background: 'rgba(239, 68, 68, 0.15)',
+                border: '1px solid rgba(239, 68, 68, 0.3)',
+                color: '#fca5a5',
+                fontSize: '0.85rem',
+                lineHeight: 1.4,
+              }}
+            >
+              ⚠️ <strong>API Key needs to be re-entered:</strong> The panel encryption secret was updated, so the previously stored key could not be decrypted. Please type your API key below and click <strong>Save</strong> to restore functionality.
+            </div>
+          )}
 
           {!editingId && presets.length > 0 && (
             <div style={{ marginBottom: '18px' }}>
@@ -1508,6 +1760,110 @@ export function CompanionTab({ serverId }: CompanionTabProps) {
           </div>
         </div>
       </div>
+      )}
+
+      {/* ── Bot Live Logs Sub-Tab ── */}
+      {activeSubTab === 'logs' && (
+        <div style={{ background: '#121624', border: '1px solid rgba(255, 255, 255, 0.08)', borderRadius: '12px', padding: '20px' }}>
+          <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', borderBottom: '1px solid rgba(255, 255, 255, 0.08)', paddingBottom: '14px', marginBottom: '16px', flexWrap: 'wrap', gap: '12px' }}>
+            <div style={{ display: 'flex', alignItems: 'center', gap: '10px' }}>
+              <span style={{ fontSize: '1.25rem' }}>📜</span>
+              <div>
+                <h3 style={{ margin: 0, fontSize: '1.05rem', fontWeight: 600, color: '#f8fafc' }}>
+                  Live Companion Bot Runner Logs
+                </h3>
+                <p style={{ margin: '2px 0 0', fontSize: '0.75rem', color: '#94a3b8' }}>
+                  Real-time stdout/stderr output from the companion bot container
+                </p>
+              </div>
+              {bot?.containerId && (
+                <span style={{ fontFamily: 'monospace', fontSize: '0.75rem', background: 'rgba(255, 255, 255, 0.05)', padding: '2px 8px', borderRadius: '4px', border: '1px solid rgba(255, 255, 255, 0.1)', color: '#cbd5e1' }}>
+                  {bot.containerId.slice(0, 12)}
+                </span>
+              )}
+            </div>
+
+            <div style={{ display: 'flex', alignItems: 'center', gap: '12px' }}>
+              <label style={{ display: 'flex', alignItems: 'center', gap: '6px', fontSize: '0.8rem', color: '#94a3b8', cursor: 'pointer', userSelect: 'none' }}>
+                <input
+                  type="checkbox"
+                  checked={autoScrollLogs}
+                  onChange={(e) => setAutoScrollLogs(e.target.checked)}
+                  style={{ accentColor: '#6366f1' }}
+                />
+                Auto-scroll
+              </label>
+              <button
+                type="button"
+                onClick={fetchBotLogs}
+                disabled={loadingLogs}
+                style={{
+                  background: 'rgba(99, 102, 241, 0.15)',
+                  border: '1px solid rgba(99, 102, 241, 0.3)',
+                  color: '#818cf8',
+                  padding: '6px 14px',
+                  borderRadius: '6px',
+                  fontSize: '0.8rem',
+                  fontWeight: 600,
+                  cursor: loadingLogs ? 'not-allowed' : 'pointer',
+                  display: 'flex',
+                  alignItems: 'center',
+                  gap: '6px',
+                }}
+              >
+                <span>🔄</span>
+                <span>{loadingLogs ? 'Loading...' : 'Refresh Logs'}</span>
+              </button>
+            </div>
+          </div>
+
+          <div
+            ref={botLogsContainerRef}
+            style={{
+              fontFamily: 'ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace',
+              fontSize: '0.75rem',
+              background: '#090d16',
+              border: '1px solid rgba(255, 255, 255, 0.06)',
+              borderRadius: '8px',
+              padding: '14px',
+              height: '460px',
+              overflowY: 'auto',
+              color: '#e2e8f0',
+              lineHeight: '1.6',
+              boxShadow: 'inset 0 2px 4px rgba(0, 0, 0, 0.5)',
+              userSelect: 'text',
+            }}
+          >
+            {botLogs.length === 0 ? (
+              <div style={{ textAlign: 'center', padding: '60px 20px', color: '#64748b' }}>
+                <div style={{ fontSize: '1.5rem', marginBottom: '8px' }}>💬</div>
+                <p style={{ margin: 0 }}>No bot logs recorded yet.</p>
+                <p style={{ margin: '4px 0 0', fontSize: '0.75rem' }}>
+                  Click "Spawn Bot Into Server" in the Controls tab to run the companion container.
+                </p>
+              </div>
+            ) : (
+              botLogs.map((line, idx) => {
+                const isError = line.toLowerCase().includes('error') || line.includes('Invalid') || line.includes('failed');
+                const isWarn = line.toLowerCase().includes('warn');
+                const isSuccess = line.includes('successfully spawned') || line.includes('ready') || line.includes('connected');
+                const isBot = line.includes('[BotRunner]');
+
+                let color = '#cbd5e1';
+                if (isError) color = '#f87171';
+                else if (isWarn) color = '#fbbf24';
+                else if (isSuccess) color = '#4ade80';
+                else if (isBot) color = '#38bdf8';
+
+                return (
+                  <div key={idx} style={{ color, whiteSpace: 'pre-wrap', wordBreak: 'break-all' }}>
+                    {line}
+                  </div>
+                );
+              })
+            )}
+          </div>
+        </div>
       )}
 
       {/* ── Microsoft Device Code Modal ── */}

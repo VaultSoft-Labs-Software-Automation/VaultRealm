@@ -182,67 +182,67 @@ export function ServerPlayersTab({ server }: ServerPlayersTabProps) {
   );
 
   return (
-    <div className="space-y-6 animate-fade-in">
+    <div className="space-y-4 sm:space-y-6 animate-fade-in">
       {/* ── Metric Summary Strip ───────────────────────────────────────────── */}
-      <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
-        <div className="card p-4 border border-border flex items-center justify-between">
+      <div className="grid grid-cols-2 md:grid-cols-4 gap-2.5 sm:gap-4">
+        <div className="card p-3 sm:p-4 border border-border flex items-center justify-between">
           <div>
-            <span className="text-[11px] text-muted-foreground font-mono block">Connected Players</span>
-            <div className="flex items-center gap-2 mt-1">
-              <span className="text-xl font-bold font-mono text-emerald-400">
+            <span className="text-[10px] sm:text-[11px] text-muted-foreground font-mono block">Connected</span>
+            <div className="flex items-center gap-1.5 sm:gap-2 mt-0.5 sm:mt-1">
+              <span className="text-lg sm:text-xl font-bold font-mono text-emerald-400">
                 {data?.online.count ?? 0}
               </span>
-              <span className="text-xs text-muted-foreground font-mono">
+              <span className="text-[10px] sm:text-xs text-muted-foreground font-mono">
                 / {data?.online.max ?? 20} max
               </span>
             </div>
           </div>
-          <span className="text-2xl opacity-80">🟢</span>
+          <span className="text-xl sm:text-2xl opacity-80">🟢</span>
         </div>
 
-        <div className="card p-4 border border-border flex items-center justify-between">
+        <div className="card p-3 sm:p-4 border border-border flex items-center justify-between">
           <div>
-            <span className="text-[11px] text-muted-foreground font-mono block">Banned Players</span>
-            <span className="text-xl font-bold font-mono text-red-400 mt-1 block">
+            <span className="text-[10px] sm:text-[11px] text-muted-foreground font-mono block">Banned Players</span>
+            <span className="text-lg sm:text-xl font-bold font-mono text-red-400 mt-0.5 sm:mt-1 block">
               {data?.bannedPlayers.length ?? 0}
             </span>
           </div>
-          <span className="text-2xl opacity-80">🚫</span>
+          <span className="text-xl sm:text-2xl opacity-80">🚫</span>
         </div>
 
-        <div className="card p-4 border border-border flex items-center justify-between">
+        <div className="card p-3 sm:p-4 border border-border flex items-center justify-between">
           <div>
-            <span className="text-[11px] text-muted-foreground font-mono block">Blocked IP Addresses</span>
-            <span className="text-xl font-bold font-mono text-amber-400 mt-1 block">
+            <span className="text-[10px] sm:text-[11px] text-muted-foreground font-mono block">Blocked IPs</span>
+            <span className="text-lg sm:text-xl font-bold font-mono text-amber-400 mt-0.5 sm:mt-1 block">
               {data?.bannedIps.length ?? 0}
             </span>
           </div>
-          <span className="text-2xl opacity-80">🛑</span>
+          <span className="text-xl sm:text-2xl opacity-80">🛑</span>
         </div>
 
-        <div className="card p-4 border border-border flex items-center justify-between">
+        <div className="card p-3 sm:p-4 border border-border flex items-center justify-between">
           <div>
-            <span className="text-[11px] text-muted-foreground font-mono block">Server Operators (OP)</span>
-            <span className="text-xl font-bold font-mono text-primary mt-1 block">
+            <span className="text-[10px] sm:text-[11px] text-muted-foreground font-mono block">Operators (OP)</span>
+            <span className="text-lg sm:text-xl font-bold font-mono text-primary mt-0.5 sm:mt-1 block">
               {data?.ops.length ?? 0}
             </span>
           </div>
-          <span className="text-2xl opacity-80">⭐</span>
+          <span className="text-xl sm:text-2xl opacity-80">⭐</span>
         </div>
       </div>
 
       {/* ── Subtab Navigation & Quick Action Strip ───────────────────────────── */}
-      <div className="card p-4 border border-border/80 flex flex-col sm:flex-row sm:items-center justify-between gap-4">
-        <div className="flex bg-card-subtle p-1 rounded-lg border border-border overflow-x-auto">
+      <div className="card p-3 sm:p-4 border border-border/80 flex flex-col sm:flex-row sm:items-center justify-between gap-3 sm:gap-4">
+        <div className="flex bg-card-subtle p-1 rounded-lg border border-border overflow-x-auto no-scrollbar touch-scroll">
           <button
             onClick={() => setActiveSubtab('online')}
-            className={`px-3 py-1.5 text-xs font-semibold rounded-md transition-all flex items-center gap-1.5 shrink-0 ${
+            className={`px-3 py-1.5 text-xs font-semibold rounded-md transition-all flex items-center gap-1.5 shrink-0 whitespace-nowrap ${
               activeSubtab === 'online'
                 ? 'bg-primary text-primary-foreground shadow-sm'
                 : 'text-muted-foreground hover:text-foreground'
             }`}
           >
-            <span>🟢 Online Players</span>
+            <span>🟢 Online</span>
             <span className="badge badge-neutral text-[9px] py-0 px-1 font-mono">
               {data?.online.count ?? 0}
             </span>
@@ -250,13 +250,13 @@ export function ServerPlayersTab({ server }: ServerPlayersTabProps) {
 
           <button
             onClick={() => setActiveSubtab('banned-players')}
-            className={`px-3 py-1.5 text-xs font-semibold rounded-md transition-all flex items-center gap-1.5 shrink-0 ${
+            className={`px-3 py-1.5 text-xs font-semibold rounded-md transition-all flex items-center gap-1.5 shrink-0 whitespace-nowrap ${
               activeSubtab === 'banned-players'
                 ? 'bg-primary text-primary-foreground shadow-sm'
                 : 'text-muted-foreground hover:text-foreground'
             }`}
           >
-            <span>🚫 Banned Players</span>
+            <span>🚫 Banned</span>
             <span className="badge badge-neutral text-[9px] py-0 px-1 font-mono">
               {data?.bannedPlayers.length ?? 0}
             </span>
@@ -264,13 +264,13 @@ export function ServerPlayersTab({ server }: ServerPlayersTabProps) {
 
           <button
             onClick={() => setActiveSubtab('banned-ips')}
-            className={`px-3 py-1.5 text-xs font-semibold rounded-md transition-all flex items-center gap-1.5 shrink-0 ${
+            className={`px-3 py-1.5 text-xs font-semibold rounded-md transition-all flex items-center gap-1.5 shrink-0 whitespace-nowrap ${
               activeSubtab === 'banned-ips'
                 ? 'bg-primary text-primary-foreground shadow-sm'
                 : 'text-muted-foreground hover:text-foreground'
             }`}
           >
-            <span>🛑 Blocked IPs</span>
+            <span>🛑 IPs</span>
             <span className="badge badge-neutral text-[9px] py-0 px-1 font-mono">
               {data?.bannedIps.length ?? 0}
             </span>
@@ -278,20 +278,20 @@ export function ServerPlayersTab({ server }: ServerPlayersTabProps) {
 
           <button
             onClick={() => setActiveSubtab('actions')}
-            className={`px-3 py-1.5 text-xs font-semibold rounded-md transition-all flex items-center gap-1.5 shrink-0 ${
+            className={`px-3 py-1.5 text-xs font-semibold rounded-md transition-all flex items-center gap-1.5 shrink-0 whitespace-nowrap ${
               activeSubtab === 'actions'
                 ? 'bg-primary text-primary-foreground shadow-sm'
                 : 'text-muted-foreground hover:text-foreground'
             }`}
           >
-            <span>⚡ Quick Actions</span>
+            <span>⚡ Actions</span>
           </button>
         </div>
 
         <button
           onClick={fetchPlayers}
           disabled={loading}
-          className="btn btn-secondary text-xs py-1.5 px-3 flex items-center gap-1 self-start sm:self-auto shrink-0"
+          className="btn btn-secondary text-xs py-1.5 px-3 flex items-center justify-center gap-1 w-full sm:w-auto shrink-0"
         >
           <span className={loading ? 'animate-spin inline-block' : ''}>🔄</span>
           <span>Refresh</span>
@@ -319,7 +319,7 @@ export function ServerPlayersTab({ server }: ServerPlayersTabProps) {
                 return (
                   <div
                     key={playerName}
-                    className="card p-4 border border-border flex items-center justify-between gap-3 hover:border-primary/40 transition-colors"
+                    className="card p-3.5 sm:p-4 border border-border flex flex-col sm:flex-row sm:items-center justify-between gap-3 hover:border-primary/40 transition-colors"
                   >
                     <div className="flex items-center gap-3 min-w-0">
                       <img
@@ -348,24 +348,24 @@ export function ServerPlayersTab({ server }: ServerPlayersTabProps) {
                       </div>
                     </div>
 
-                    <div className="flex items-center gap-1 shrink-0">
+                    <div className="grid grid-cols-3 sm:flex sm:items-center gap-1.5 w-full sm:w-auto pt-2 sm:pt-0 border-t sm:border-t-0 border-border/40">
                       <button
                         onClick={() => handleKickDirect(playerName)}
-                        className="btn btn-secondary btn-sm text-[11px] py-1 px-2 text-amber-400 hover:text-amber-300"
+                        className="btn btn-secondary btn-sm text-xs py-1.5 sm:py-1 px-2 text-amber-400 hover:text-amber-300 flex items-center justify-center"
                         title="Kick player from server"
                       >
                         Kick
                       </button>
                       <button
                         onClick={() => handleBanDirect(playerName)}
-                        className="btn btn-secondary btn-sm text-[11px] py-1 px-2 text-red-400 hover:text-red-300"
+                        className="btn btn-secondary btn-sm text-xs py-1.5 sm:py-1 px-2 text-red-400 hover:text-red-300 flex items-center justify-center"
                         title="Ban player from server"
                       >
                         Ban
                       </button>
                       <button
                         onClick={() => handleBanIpDirect(playerName)}
-                        className="btn btn-secondary btn-sm text-[11px] py-1 px-2 text-destructive"
+                        className="btn btn-secondary btn-sm text-xs py-1.5 sm:py-1 px-2 text-destructive flex items-center justify-center"
                         title="Ban IP address"
                       >
                         Ban IP

@@ -80,10 +80,31 @@ export interface InstalledMod {
   modifiedAt: string;
 }
 
+export interface InstalledModpackInfo {
+  name: string;
+  versionId?: string;
+  installedAt: string;
+  dependencies?: Record<string, string>;
+  installedModsCount: number;
+  installedFilesCount: number;
+}
+
+export interface InstallModResponse {
+  filename: string;
+  sizeBytes: number;
+  isMrpack?: boolean;
+  modpackName?: string;
+  versionId?: string;
+  installedModsCount?: number;
+  installedFilesCount?: number;
+  skippedClientModsCount?: number;
+}
+
 export interface ServerModsResponse {
   folder: string;
   detectedGameVersion?: string | null;
   serverType?: string | null;
+  modpack?: InstalledModpackInfo | null;
   mods: InstalledMod[];
 }
 
@@ -119,6 +140,30 @@ export interface ServerPlayersData {
   bannedPlayers: BannedPlayer[];
   bannedIps: BannedIp[];
   ops: ServerOp[];
+}
+
+export type PropertyCategory = 'gameplay' | 'security' | 'world' | 'performance' | 'network' | 'custom';
+export type PropertyType = 'boolean' | 'number' | 'string' | 'select';
+
+export interface ServerPropertyItem {
+  key: string;
+  value: string;
+  label: string;
+  description: string;
+  category: PropertyCategory;
+  type: PropertyType;
+  options?: Array<{ label: string; value: string }>;
+  defaultValue: string;
+  isSecret?: boolean;
+  isModified: boolean;
+}
+
+export interface ServerPropertiesResponse {
+  templateId: string;
+  isMinecraft: boolean;
+  serverStatus: string;
+  properties: ServerPropertyItem[];
+  rawContent: string;
 }
 
 export interface CapacityStatus {
@@ -326,7 +371,7 @@ export const api = {
     id: string,
     data: { downloadUrl: string; filename: string; projectId?: string; title?: string },
   ) =>
-    request<{ filename: string; sizeBytes: number }>(`/api/servers/${id}/mods/install`, {
+    request<InstallModResponse>(`/api/servers/${id}/mods/install`, {
       method: 'POST',
       body: JSON.stringify(data),
     }),
@@ -334,7 +379,7 @@ export const api = {
     id: string,
     data: { filename: string; contentBase64: string },
   ) =>
-    request<{ filename: string; sizeBytes: number }>(`/api/servers/${id}/mods/upload`, {
+    request<InstallModResponse>(`/api/servers/${id}/mods/upload`, {
       method: 'POST',
       body: JSON.stringify(data),
     }),
@@ -381,7 +426,48 @@ export const api = {
       body: JSON.stringify({ player, op }),
     }),
 
+  // Server Properties & Minecraft Configuration
+  getServerProperties: (id: string) => request<ServerPropertiesResponse>(`/api/servers/${id}/properties`),
+  updateServerProperty: (id: string, key: string, value: string) =>
+    request<{ success: boolean; key: string; value: string; requiresRestart: boolean }>(
+      `/api/servers/${id}/properties/property`,
+      {
+        method: 'POST',
+        body: JSON.stringify({ key, value }),
+      },
+    ),
+  updateServerProperties: (id: string, data: { properties?: Record<string, string>; rawContent?: string }) =>
+    request<{ success: boolean; count: number; requiresRestart: boolean }>(`/api/servers/${id}/properties`, {
+      method: 'PUT',
+      body: JSON.stringify(data),
+    }),
+  setServerSpawnPoint: (
+    id: string,
+    data: { x: number; y: number; z: number; angle?: number; spawnProtection?: number },
+  ) =>
+    request<{ success: boolean; message: string; commandExecuted: boolean }>(
+      `/api/servers/${id}/properties/spawn-point`,
+      {
+        method: 'POST',
+        body: JSON.stringify(data),
+      },
+    ),
+
   // Admin
+  getTelegramConfig: () => request<PublicTelegramConfig>('/api/system/telegram'),
+  saveTelegramConfig: (data: {
+    token?: string;
+    enabled?: boolean;
+    allowedChatIds?: string[];
+    notificationsEnabled?: boolean;
+  }) => request<{ message: string; config: PublicTelegramConfig }>('/api/system/telegram', {
+    method: 'PUT',
+    body: JSON.stringify(data),
+  }),
+  testTelegramToken: (token: string) => request<{ ok: boolean; botUsername?: string; botFirstName?: string }>('/api/system/telegram/test', {
+    method: 'POST',
+    body: JSON.stringify({ token }),
+  }),
   listInvites: () => request<Array<{ id: string; code: string; uses: number; maxUses: number; createdAt: string }>>('/api/admin/invites'),
   createInvite: (maxUses = 10) =>
     request<{ id: string; code: string; maxUses: number }>('/api/admin/invites', {
@@ -433,9 +519,10 @@ export const api = {
       method: 'PUT',
       body: JSON.stringify(data),
     }),
-  spawnBot: (serverId: string) =>
+  spawnBot: (serverId: string, pull?: boolean) =>
     request<{ success: boolean; status: string; containerId: string }>(`/api/servers/${serverId}/companion/bot/spawn`, {
       method: 'POST',
+      body: pull ? JSON.stringify({ pull: true }) : undefined,
     }),
   despawnBot: (serverId: string) =>
     request<{ success: boolean; status: string }>(`/api/servers/${serverId}/companion/bot/despawn`, {
@@ -446,6 +533,8 @@ export const api = {
       method: 'POST',
       body: JSON.stringify({ action, message }),
     }),
+  getBotLogs: (serverId: string, tail = 200) =>
+    request<{ logs: string[]; containerRunning: boolean }>(`/api/servers/${serverId}/companion/bot/logs?tail=${tail}`),
   getBotUsage: (serverId: string) =>
     request<CompanionUsage>(`/api/servers/${serverId}/companion/bot/usage`),
   getBotTraces: (serverId: string) =>
@@ -455,7 +544,222 @@ export const api = {
       `/api/servers/${serverId}/companion/bot/device-code`,
       { method: 'POST' },
     ),
+
+  // Backups & Restores
+  getServerBackups: (serverId: string) =>
+    request<{ backups: BackupDetail[] }>(`/api/servers/${serverId}/backups`),
+  createServerBackup: (serverId: string, data: { name?: string; uploadToDrive?: boolean }) =>
+    request<BackupDetail>(`/api/servers/${serverId}/backups`, {
+      method: 'POST',
+      body: JSON.stringify(data),
+    }),
+  restoreServerBackup: (serverId: string, backupId: string) =>
+    request<{ message: string }>(`/api/servers/${serverId}/backups/${backupId}/restore`, {
+      method: 'POST',
+    }),
+  uploadBackupToDrive: (serverId: string, backupId: string) =>
+    request<BackupDetail>(`/api/servers/${serverId}/backups/${backupId}/upload-drive`, {
+      method: 'POST',
+    }),
+  deleteServerBackup: (serverId: string, backupId: string) =>
+    request<{ message: string }>(`/api/servers/${serverId}/backups/${backupId}`, {
+      method: 'DELETE',
+    }),
+  getServerBackupDownloadUrl: (serverId: string, backupId: string) =>
+    `/api/servers/${serverId}/backups/${backupId}/download`,
+  uploadAndRestoreServerBackup: (
+    serverId: string,
+    data: {
+      filename: string;
+      contentBase64: string;
+      name?: string;
+      restoreImmediately?: boolean;
+    },
+  ) =>
+    request<{ backup: BackupDetail; restored: boolean; message: string }>(
+      `/api/servers/${serverId}/backups/upload`,
+      {
+        method: 'POST',
+        body: JSON.stringify(data),
+      },
+    ),
+  getUnindexedBackups: (serverId: string) =>
+    request<{ unindexed: UnindexedBackup[] }>(`/api/servers/${serverId}/backups/unindexed`),
+  restoreServerFromFile: (serverId: string, data: { filename: string; name?: string }) =>
+    request<{ message: string; backup: BackupDetail }>(`/api/servers/${serverId}/backups/restore-file`, {
+      method: 'POST',
+      body: JSON.stringify(data),
+    }),
+
+  // System Backups & Google Drive Settings
+  getGoogleDriveConfig: () =>
+    request<PublicGoogleDriveConfig>('/api/system/google-drive'),
+  getGoogleDriveAuthUrl: (
+    optsOrRedirectUri?: string | { redirectUri?: string; clientId?: string; clientSecret?: string; folderId?: string },
+    clientId?: string,
+  ) => {
+    if (typeof optsOrRedirectUri === 'object' && optsOrRedirectUri !== null) {
+      return request<{ url: string; redirectUri: string }>('/api/system/google-drive/auth-url', {
+        method: 'POST',
+        body: JSON.stringify(optsOrRedirectUri),
+      });
+    }
+    const redirectUri = optsOrRedirectUri;
+    return request<{ url: string; redirectUri: string }>('/api/system/google-drive/auth-url', {
+      method: 'POST',
+      body: JSON.stringify({ redirectUri, clientId }),
+    });
+  },
+  saveGoogleDriveAppCredentials: (data: {
+    clientId: string;
+    clientSecret?: string;
+    folderId?: string;
+  }) =>
+    request<{ message: string; config: PublicGoogleDriveConfig }>('/api/system/google-drive/credentials', {
+      method: 'POST',
+      body: JSON.stringify(data),
+    }),
+  exchangeGoogleDriveCode: (data: {
+    code: string;
+    redirectUri?: string;
+    clientId?: string;
+    clientSecret?: string;
+    folderId?: string;
+  }) =>
+    request<{ message: string; config: PublicGoogleDriveConfig }>('/api/system/google-drive/exchange-code', {
+      method: 'POST',
+      body: JSON.stringify(data),
+    }),
+  saveGoogleDriveConfig: (data: {
+    mode?: 'oauth' | 'webhook';
+    clientId?: string;
+    clientSecret?: string;
+    refreshToken?: string;
+    folderId?: string;
+    webhookUrl?: string;
+  }) =>
+    request<{ message: string; config: PublicGoogleDriveConfig }>('/api/system/google-drive', {
+      method: 'PUT',
+      body: JSON.stringify(data),
+    }),
+  testGoogleDriveConnection: () =>
+    request<{ message: string; details: GoogleDriveTestResult }>('/api/system/google-drive/test', {
+      method: 'POST',
+    }),
+  deleteGoogleDriveConfig: () =>
+    request<{ message: string }>('/api/system/google-drive', {
+      method: 'DELETE',
+    }),
+  createSystemBackup: (data: { uploadToDrive?: boolean } = {}) =>
+    request<SystemBackupDetail>('/api/system/backups', {
+      method: 'POST',
+      body: JSON.stringify(data),
+    }),
+  listSystemBackups: () =>
+    request<{ backups: SystemBackupDetail[] }>('/api/system/backups'),
+  getSystemBackupDownloadUrl: (filename: string) =>
+    `/api/system/backups/${encodeURIComponent(filename)}/download`,
 };
+
+export async function downloadWithAuth(url: string, filename: string): Promise<void> {
+  const headers = new Headers();
+  if (currentToken) {
+    headers.set('Authorization', `Bearer ${currentToken}`);
+  }
+  const res = await fetch(url, { headers, credentials: 'include' });
+  if (!res.ok) {
+    let msg = `Download failed with status ${res.status}`;
+    try {
+      const data = await res.json();
+      if (data?.message) msg = data.message;
+    } catch {
+      // ignore
+    }
+    throw new Error(msg);
+  }
+  const blob = await res.blob();
+  const blobUrl = window.URL.createObjectURL(blob);
+  const a = document.createElement('a');
+  a.href = blobUrl;
+  a.download = filename;
+  document.body.appendChild(a);
+  a.click();
+  a.remove();
+  window.URL.revokeObjectURL(blobUrl);
+}
+
+export interface BackupDetail {
+  id: string;
+  serverId: string;
+  name: string;
+  path: string;
+  sizeBytes: number;
+  gdriveFileId: string | null;
+  gdriveWebLink: string | null;
+  createdAt: string;
+}
+
+export interface UnindexedBackup {
+  filename: string;
+  sizeBytes: number;
+  modifiedAt: string;
+}
+
+export interface PublicTelegramConfig {
+  configured: boolean;
+  enabled: boolean;
+  botUsername?: string;
+  botFirstName?: string;
+  allowedChatIds?: string[];
+  notificationsEnabled: boolean;
+  pollingActive: boolean;
+  hasEnvToken: boolean;
+  updatedAt?: string;
+}
+
+export interface PublicGoogleDriveConfig {
+  configured: boolean;
+  mode?: 'oauth' | 'webhook';
+  clientId?: string;
+  folderId?: string;
+  folderName?: string;
+  userEmail?: string;
+  userName?: string;
+  displayName?: string;
+  webhookUrl?: string;
+  hasEnvCredentials?: boolean;
+  hasClientCredentials?: boolean;
+  envClientId?: string;
+  updatedAt?: string;
+}
+
+export interface GoogleDriveTestResult {
+  ok: boolean;
+  email?: string;
+  displayName?: string;
+  folderName?: string;
+  user?: {
+    displayName: string;
+    emailAddress: string;
+    photoLink?: string;
+  };
+  storageQuota?: {
+    limit?: string;
+    usage?: string;
+    limitBytes?: number;
+    usageBytes?: number;
+    usageInDrive?: string;
+  };
+  error?: string;
+}
+
+export interface SystemBackupDetail {
+  filename: string;
+  sizeBytes: number;
+  createdAt: string;
+  gdriveFileId?: string | null;
+  gdriveWebLink?: string | null;
+}
 
 export interface LlmEndpointPreset {
   id: string;
@@ -473,6 +777,7 @@ export interface LlmEndpoint {
   defaultModel: string | null;
   lastFour: string | null;
   hasKey: boolean;
+  keyDecryptionFailed?: boolean;
   supportsTools: boolean;
   timeoutS: number;
   createdAt: string;
@@ -501,6 +806,8 @@ export interface BotDetail {
   mode: 'off' | 'manual' | 'auto-solo' | 'always';
   authMode: 'offline' | 'microsoft' | 'proxy';
   whoCanCommand: string;
+  ownerPlayerName?: string;
+  trustedPlayers?: string[];
   proactive: boolean;
   dailyTokenBudget: number;
   rpmLimit: number;
@@ -520,6 +827,8 @@ export interface BotConfigInput {
   mode?: 'off' | 'manual' | 'auto-solo' | 'always';
   authMode?: 'offline' | 'microsoft' | 'proxy';
   whoCanCommand?: string;
+  ownerPlayerName?: string;
+  trustedPlayers?: string[];
   dailyTokenBudget?: number;
   rpmLimit?: number;
   proactive?: boolean;

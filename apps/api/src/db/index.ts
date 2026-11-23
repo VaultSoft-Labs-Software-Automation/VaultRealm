@@ -147,7 +147,10 @@ export function runMigrations(): void {
       created_at TEXT NOT NULL DEFAULT (datetime('now')),
       size_bytes INTEGER NOT NULL,
       path TEXT NOT NULL,
-      kind TEXT NOT NULL DEFAULT 'manual' CHECK(kind IN ('manual', 'scheduled'))
+      kind TEXT NOT NULL DEFAULT 'manual' CHECK(kind IN ('manual', 'scheduled')),
+      name TEXT,
+      gdrive_file_id TEXT,
+      gdrive_web_link TEXT
     );
 
     CREATE TABLE IF NOT EXISTS audit_log (
@@ -229,5 +232,28 @@ export function runMigrations(): void {
       player_name TEXT NOT NULL,
       role TEXT NOT NULL DEFAULT 'guest' CHECK(role IN ('owner','trusted','guest'))
     );
+
+    CREATE TABLE IF NOT EXISTS system_settings (
+      key TEXT PRIMARY KEY,
+      value_json TEXT NOT NULL,
+      updated_at TEXT NOT NULL DEFAULT (datetime('now'))
+    );
   `);
+
+  // Safe migrations for newly added columns on existing databases
+  try {
+    sqlite.exec(`ALTER TABLE backups ADD COLUMN name TEXT;`);
+  } catch {
+    // Column already exists
+  }
+  try {
+    sqlite.exec(`ALTER TABLE backups ADD COLUMN gdrive_file_id TEXT;`);
+  } catch {
+    // Column already exists
+  }
+  try {
+    sqlite.exec(`ALTER TABLE backups ADD COLUMN gdrive_web_link TEXT;`);
+  } catch {
+    // Column already exists
+  }
 }

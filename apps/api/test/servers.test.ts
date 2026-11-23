@@ -364,5 +364,60 @@ describe('Server lifecycle', () => {
 
       expect(res.statusCode).toBe(403);
     });
+
+    it('owner can delete server with companion bot and child records without FK errors', async () => {
+      const createRes = await app.inject({
+        method: 'POST',
+        url: '/api/servers',
+        cookies: { vr_session: adminCookie },
+        payload: { name: 'Server With Bot', templateId: 'minecraft-java' },
+      });
+      const serverId = createRes.json().id;
+
+      // Create an endpoint & companion bot record for this server
+      const epRes = await app.inject({
+        method: 'POST',
+        url: '/api/llm-endpoints',
+        cookies: { vr_session: adminCookie },
+        payload: {
+          name: 'Test Endpoint',
+          baseUrl: 'https://api.openai.com/v1',
+          apiKey: 'sk-test-key-123',
+        },
+      });
+      const endpointId = epRes.json().id;
+
+      // Update companion bot configuration for server
+      await app.inject({
+        method: 'PUT',
+        url: `/api/servers/${serverId}/companion/bot`,
+        cookies: { vr_session: adminCookie },
+        payload: {
+          endpointId,
+          name: 'Buddy',
+          persona: 'helpful friend',
+          authMode: 'offline',
+          spawnMode: 'manual',
+          whoCanCommand: 'owner_only',
+        },
+      });
+
+      // Now delete the server
+      const deleteRes = await app.inject({
+        method: 'DELETE',
+        url: `/api/servers/${serverId}`,
+        cookies: { vr_session: adminCookie },
+      });
+
+      expect(deleteRes.statusCode).toBe(200);
+      expect(deleteRes.json().message).toBe('Server deleted.');
+
+      const listRes = await app.inject({
+        method: 'GET',
+        url: '/api/servers',
+        cookies: { vr_session: adminCookie },
+      });
+      expect(listRes.json()).toHaveLength(0);
+    });
   });
 });

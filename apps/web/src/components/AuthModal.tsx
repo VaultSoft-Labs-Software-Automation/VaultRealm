@@ -61,8 +61,8 @@ export function AuthModal({ needsSetup, onSuccess }: AuthModalProps) {
   };
 
   return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/70 backdrop-blur-md p-4 animate-fade-in">
-      <div className="card max-w-md w-full p-8 border border-border shadow-2xl relative glow-primary">
+    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/70 backdrop-blur-md p-3 sm:p-4 animate-fade-in overflow-y-auto">
+      <div className="card max-w-md w-full p-5 sm:p-8 border border-border shadow-2xl relative glow-primary my-auto">
         <div className="text-center mb-6">
           <img
             src="/VR2.jpg"

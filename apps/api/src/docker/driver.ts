@@ -17,6 +17,7 @@ export interface ContainerCreateOptions {
   pidsLimit?: number;
   restartPolicy?: 'no' | 'unless-stopped' | 'on-failure';
   networkMode?: string;
+  extraHosts?: string[];
   readOnly?: boolean;
   capDrop?: string[];
   capAdd?: string[];
@@ -75,6 +76,8 @@ export interface ContainerInspect {
   };
   networkSettings: {
     ports: Record<string, Array<{ HostPort: string }> | null>;
+    ipAddress?: string;
+    gateway?: string;
   };
   mounts: Array<{
     source: string;
@@ -113,6 +116,8 @@ export interface DockerEvent {
 }
 
 export interface DockerDriver {
+  /** Whether this driver is an in-memory simulation / fake */
+  readonly isMock?: boolean;
   // ── Container lifecycle ────────────────────────────────────────────────────
   /** Create a container (does not start it). */
   createContainer(opts: ContainerCreateOptions): Promise<string>;

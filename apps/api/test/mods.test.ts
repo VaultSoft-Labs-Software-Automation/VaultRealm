@@ -163,4 +163,197 @@ describe('Server Mods & Plugins Management', () => {
     const detected = detectServerGameVersion(serverId, 'minecraft-java');
     expect(detected).toBe('26.3');
   });
+
+  describe('Modrinth .mrpack Modpack Support', () => {
+    function createTestMrpack(manifest: Record<string, unknown>, extraFiles: Record<string, string> = {}): Buffer {
+      const entries: Array<{ filename: string; content: Buffer }> = [
+        {
+          filename: 'modrinth.index.json',
+          content: Buffer.from(JSON.stringify(manifest), 'utf8'),
+        },
+      ];
+
+      for (const [fn, content] of Object.entries(extraFiles)) {
+        entries.push({
+          filename: fn,
+          content: Buffer.from(content, 'utf8'),
+        });
+      }
+
+      const localHeaders: Buffer[] = [];
+      const cdHeaders: Buffer[] = [];
+      let offset = 0;
+
+      for (const entry of entries) {
+        const fnBytes = Buffer.from(entry.filename, 'utf8');
+        const data = entry.content;
+
+        const lh = Buffer.alloc(30 + fnBytes.length + data.length);
+        lh.writeUInt32LE(0x04034b50, 0);
+        lh.writeUInt16LE(20, 4);
+        lh.writeUInt16LE(0, 6);
+        lh.writeUInt16LE(0, 8); // method 0 (uncompressed)
+        lh.writeUInt16LE(0, 10);
+        lh.writeUInt16LE(0, 12);
+        lh.writeUInt32LE(0, 14);
+        lh.writeUInt32LE(data.length, 18);
+        lh.writeUInt32LE(data.length, 22);
+        lh.writeUInt16LE(fnBytes.length, 26);
+        lh.writeUInt16LE(0, 28);
+        fnBytes.copy(lh, 30);
+        data.copy(lh, 30 + fnBytes.length);
+        localHeaders.push(lh);
+
+        const cdh = Buffer.alloc(46 + fnBytes.length);
+        cdh.writeUInt32LE(0x02014b50, 0);
+        cdh.writeUInt16LE(20, 4);
+        cdh.writeUInt16LE(20, 6);
+        cdh.writeUInt16LE(0, 8);
+        cdh.writeUInt16LE(0, 10);
+        cdh.writeUInt16LE(0, 12);
+        cdh.writeUInt32LE(0, 14);
+        cdh.writeUInt32LE(0, 16);
+        cdh.writeUInt32LE(data.length, 20);
+        cdh.writeUInt32LE(data.length, 24);
+        cdh.writeUInt16LE(fnBytes.length, 28);
+        cdh.writeUInt16LE(0, 30);
+        cdh.writeUInt16LE(0, 32);
+        cdh.writeUInt16LE(0, 34);
+        cdh.writeUInt16LE(0, 36);
+        cdh.writeUInt32LE(0, 38);
+        cdh.writeUInt32LE(offset, 42);
+        fnBytes.copy(cdh, 46);
+        cdHeaders.push(cdh);
+
+        offset += lh.length;
+      }
+
+      const cdOffset = offset;
+      const cdData = Buffer.concat(cdHeaders);
+      const cdSize = cdData.length;
+
+      const eocd = Buffer.alloc(22);
+      eocd.writeUInt32LE(0x06054b50, 0);
+      eocd.writeUInt16LE(0, 4);
+      eocd.writeUInt16LE(0, 6);
+      eocd.writeUInt16LE(entries.length, 8);
+      eocd.writeUInt16LE(entries.length, 10);
+      eocd.writeUInt32LE(cdSize, 12);
+      eocd.writeUInt32LE(cdOffset, 16);
+      eocd.writeUInt16LE(0, 20);
+
+      return Buffer.concat([...localHeaders, cdData, eocd]);
+    }
+
+    it('POST /api/servers/:id/mods/upload installs .mrpack and extracts overrides', async () => {
+      const manifest = {
+        formatVersion: 1,
+        game: 'minecraft',
+        versionId: '1.0.0-fabric',
+        name: 'Ultimate Fabric Pack',
+        summary: 'A curated test modpack',
+        files: [
+          {
+            path: 'mods/client-only-gui.jar',
+            downloads: ['https://example.com/client-only.jar'],
+            env: { client: 'required', server: 'unsupported' },
+          },
+        ],
+        dependencies: {
+          minecraft: '1.21.4',
+          'fabric-loader': '>=0.16.0',
+        },
+      };
+
+      const extraFiles = {
+        'overrides/config/gameplay.json': '{"difficulty":"hard"}',
+        'server-overrides/config/server-tuning.json': '{"viewDistance":12}',
+      };
+
+      const mrpackBuffer = createTestMrpack(manifest, extraFiles);
+      const b64 = mrpackBuffer.toString('base64');
+
+      const res = await app.inject({
+        method: 'POST',
+        url: `/api/servers/${serverId}/mods/upload`,
+        cookies: { vr_session: adminCookie },
+        payload: {
+          filename: 'ultimate-pack.mrpack',
+          contentBase64: b64,
+        },
+      });
+
+      expect(res.statusCode).toBe(201);
+      const body = res.json();
+      expect(body.isMrpack).toBe(true);
+      expect(body.modpackName).toBe('Ultimate Fabric Pack');
+      expect(body.versionId).toBe('1.0.0-fabric');
+      expect(body.installedFilesCount).toBe(2);
+      expect(body.skippedClientModsCount).toBe(1);
+
+      // Verify files were extracted to the server data volume directory
+      const serverDir = getServerDataDir(serverId);
+      expect(fs.existsSync(`${serverDir}/config/gameplay.json`)).toBe(true);
+      expect(fs.readFileSync(`${serverDir}/config/gameplay.json`, 'utf8')).toBe('{"difficulty":"hard"}');
+      expect(fs.existsSync(`${serverDir}/config/server-tuning.json`)).toBe(true);
+      expect(fs.readFileSync(`${serverDir}/config/server-tuning.json`, 'utf8')).toBe('{"viewDistance":12}');
+
+      // Verify .vaultrealm-modpack.json was saved
+      expect(fs.existsSync(`${serverDir}/.vaultrealm-modpack.json`)).toBe(true);
+
+      // Verify GET /api/servers/:id/mods now includes modpack metadata
+      const modsRes = await app.inject({
+        method: 'GET',
+        url: `/api/servers/${serverId}/mods`,
+        cookies: { vr_session: adminCookie },
+      });
+
+      expect(modsRes.statusCode).toBe(200);
+      const modsBody = modsRes.json();
+      expect(modsBody.modpack).toBeDefined();
+      expect(modsBody.modpack.name).toBe('Ultimate Fabric Pack');
+      expect(modsBody.modpack.versionId).toBe('1.0.0-fabric');
+      expect(modsBody.modpack.installedFilesCount).toBe(2);
+    });
+
+    it('rejects unsupported game in .mrpack archive', async () => {
+      const manifest = {
+        formatVersion: 1,
+        game: 'terraria',
+        name: 'Terraria Pack',
+        files: [],
+      };
+
+      const mrpackBuffer = createTestMrpack(manifest);
+      const res = await app.inject({
+        method: 'POST',
+        url: `/api/servers/${serverId}/mods/upload`,
+        cookies: { vr_session: adminCookie },
+        payload: {
+          filename: 'terraria.mrpack',
+          contentBase64: mrpackBuffer.toString('base64'),
+        },
+      });
+
+      expect(res.statusCode).toBe(400);
+      expect(res.json().code).toBe('UNSUPPORTED_GAME');
+      expect(res.json().message).toContain('Only Minecraft modpacks are supported');
+    });
+
+    it('rejects corrupted .mrpack archive missing manifest', async () => {
+      const corruptedBuffer = Buffer.from('PK\x03\x04corrupted-archive-without-manifest');
+      const res = await app.inject({
+        method: 'POST',
+        url: `/api/servers/${serverId}/mods/upload`,
+        cookies: { vr_session: adminCookie },
+        payload: {
+          filename: 'bad.mrpack',
+          contentBase64: corruptedBuffer.toString('base64'),
+        },
+      });
+
+      expect(res.statusCode).toBe(400);
+      expect(res.json().code).toBe('INVALID_MRPACK');
+    });
+  });
 });

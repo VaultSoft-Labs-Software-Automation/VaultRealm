@@ -9,6 +9,7 @@ import type { FastifyInstance } from 'fastify';
 import { z } from 'zod';
 import { eq, and, desc } from 'drizzle-orm';
 import { nanoid } from 'nanoid';
+import fs from 'node:fs';
 import { getDatabase } from '../db/index.js';
 import { bots, servers, serverPorts, events, llmEndpoints, users, botUsage, botTraces } from '../db/schema.js';
 import { requireAuth, getRequestUser } from '../auth/middleware.js';
@@ -17,6 +18,8 @@ import { validate } from '../validation.js';
 import { writeAudit } from '../audit/log.js';
 import { getConfig } from '../config.js';
 import { getDockerDriver } from '../servers/service.js';
+import { getServerDataDir } from '../servers/volume.js';
+import { safepath } from '../safepath.js';
 import { createBotToken } from './bot-tokens.js';
 
 // ── Validation Schemas ────────────────────────────────────────────────────────
@@ -28,7 +31,9 @@ const updateBotSchema = z.object({
   model: z.string().max(100).optional().nullable(),
   mode: z.enum(['off', 'manual', 'auto-solo', 'always']).default('manual'),
   authMode: z.enum(['offline', 'microsoft', 'proxy']).default('offline'),
-  whoCanCommand: z.string().default('owner'),
+  whoCanCommand: z.enum(['everyone', 'trusted', 'owner_only', 'owner']).default('everyone'),
+  ownerPlayerName: z.string().max(32).optional().nullable(),
+  trustedPlayers: z.array(z.string().max(32)).optional(),
   dailyTokenBudget: z.number().int().min(1000).max(10_000_000).default(200_000),
   rpmLimit: z.number().int().min(1).max(120).default(10),
   proactive: z.boolean().default(false),
@@ -57,6 +62,40 @@ export async function botRoutes(app: FastifyInstance): Promise<void> {
       return reply.send({ configured: false, bot: null });
     }
 
+    if (existing.containerId && (existing.status === 'joining' || existing.status === 'online')) {
+      try {
+        const driver = getDockerDriver();
+        const inspect = await driver.inspectContainer(existing.containerId);
+        if (!inspect.state.running) {
+          const newStatus = inspect.state.exitCode !== 0 ? 'error' : 'offline';
+          const errMsg =
+            inspect.state.error ||
+            (inspect.state.exitCode !== 0 ? `Bot container exited with code ${inspect.state.exitCode}` : null);
+          db.update(bots)
+            .set({ status: newStatus, errorMessage: errMsg })
+            .where(eq(bots.id, existing.id))
+            .run();
+          existing.status = newStatus;
+          existing.errorMessage = errMsg;
+        }
+      } catch {
+        db.update(bots)
+          .set({ status: 'offline' })
+          .where(eq(bots.id, existing.id))
+          .run();
+        existing.status = 'offline';
+      }
+    }
+
+    let permissionsConfig: { ownerPlayerName?: string; trustedPlayers?: string[] } = {};
+    if (existing.permissionsJson) {
+      try {
+        permissionsConfig = JSON.parse(existing.permissionsJson);
+      } catch {
+        // ignore
+      }
+    }
+
     return reply.send({
       configured: true,
       bot: {
@@ -69,6 +108,8 @@ export async function botRoutes(app: FastifyInstance): Promise<void> {
         mode: existing.mode,
         authMode: existing.authMode,
         whoCanCommand: existing.whoCanCommand,
+        ownerPlayerName: permissionsConfig.ownerPlayerName ?? '',
+        trustedPlayers: permissionsConfig.trustedPlayers ?? [],
         proactive: existing.proactive,
         dailyTokenBudget: existing.dailyTokenBudget,
         rpmLimit: existing.rpmLimit,
@@ -109,6 +150,28 @@ export async function botRoutes(app: FastifyInstance): Promise<void> {
     const existing = db.select().from(bots).where(eq(bots.serverId, serverId)).all()[0];
     let botId: string;
 
+    let permissionsConfig: { ownerPlayerName?: string; trustedPlayers?: string[] } = {};
+    if (existing?.permissionsJson) {
+      try {
+        permissionsConfig = JSON.parse(existing.permissionsJson);
+      } catch {
+        // ignore
+      }
+    }
+    if (data.ownerPlayerName !== undefined) {
+      permissionsConfig.ownerPlayerName = data.ownerPlayerName?.trim() || undefined;
+    }
+    if (data.trustedPlayers !== undefined) {
+      permissionsConfig.trustedPlayers = data.trustedPlayers.map((p) => p.trim()).filter(Boolean);
+    }
+    const permissionsJson = JSON.stringify(permissionsConfig);
+    const normalizedWhoCanCommand =
+      data.whoCanCommand === 'owner' || data.whoCanCommand === 'owner_only'
+        ? 'owner_only'
+        : data.whoCanCommand === 'trusted'
+          ? 'trusted'
+          : 'everyone';
+
     if (existing) {
       botId = existing.id;
       db.update(bots)
@@ -119,7 +182,8 @@ export async function botRoutes(app: FastifyInstance): Promise<void> {
           model: data.model ?? null,
           mode: data.mode,
           authMode: data.authMode,
-          whoCanCommand: data.whoCanCommand,
+          whoCanCommand: normalizedWhoCanCommand,
+          permissionsJson,
           dailyTokenBudget: data.dailyTokenBudget,
           rpmLimit: data.rpmLimit,
           proactive: data.proactive,
@@ -138,7 +202,8 @@ export async function botRoutes(app: FastifyInstance): Promise<void> {
           model: data.model ?? null,
           mode: data.mode,
           authMode: data.authMode,
-          whoCanCommand: data.whoCanCommand,
+          whoCanCommand: normalizedWhoCanCommand,
+          permissionsJson,
           dailyTokenBudget: data.dailyTokenBudget,
           rpmLimit: data.rpmLimit,
           proactive: data.proactive,
@@ -200,11 +265,53 @@ export async function botRoutes(app: FastifyInstance): Promise<void> {
     // Retrieve server ports to find game port
     const ports = db.select().from(serverPorts).where(eq(serverPorts.serverId, serverId)).all();
     const gamePortEntry = ports.find((p) => p.name === 'game' || p.containerPort === 25565) ?? ports[0];
-    const serverPort = gamePortEntry ? gamePortEntry.containerPort : 25565;
+    const driver = getDockerDriver();
+    const config = getConfig();
+
+    let serverHost = 'host.docker.internal';
+    let serverPort = gamePortEntry ? gamePortEntry.hostPort : 25565;
+    let extraHosts: string[] = ['host.docker.internal:host-gateway'];
+    let panelGatewayUrl = config.PANEL_GATEWAY_URL;
+
+    if (driver.isMock) {
+      serverHost = server.containerId || 'localhost';
+      serverPort = gamePortEntry ? gamePortEntry.containerPort : 25565;
+    } else if (server.containerId) {
+      try {
+        const serverInspect = await driver.inspectContainer(server.containerId);
+        const containerIp = serverInspect.networkSettings.ipAddress;
+        const gatewayIp = serverInspect.networkSettings.gateway;
+
+        if (containerIp) {
+          // Direct bridge container-to-container connection (avoids host DNS and firewall restrictions)
+          serverHost = containerIp;
+          serverPort = gamePortEntry ? gamePortEntry.containerPort : 25565;
+        } else if (gatewayIp) {
+          serverHost = gatewayIp;
+          serverPort = gamePortEntry ? gamePortEntry.hostPort : 25565;
+        }
+
+        if (gatewayIp) {
+          extraHosts = [
+            `host.docker.internal:${gatewayIp}`,
+            'host.docker.internal:host-gateway',
+          ];
+        }
+      } catch (err) {
+        console.warn(`[bot] Could not inspect server container ${server.containerId}:`, err);
+      }
+    }
+
+    if (!driver.isMock) {
+      // Containers cannot reach the host panel via "localhost" or "127.0.0.1"
+      if (panelGatewayUrl.includes('localhost')) {
+        panelGatewayUrl = panelGatewayUrl.replace('localhost', 'host.docker.internal');
+      } else if (panelGatewayUrl.includes('127.0.0.1')) {
+        panelGatewayUrl = panelGatewayUrl.replace('127.0.0.1', 'host.docker.internal');
+      }
+    }
 
     const token = createBotToken(bot.id, 86400); // 24h token
-    const config = getConfig();
-    const driver = getDockerDriver();
 
     try {
       // Clean up any stale container if exists
@@ -213,13 +320,120 @@ export async function botRoutes(app: FastifyInstance): Promise<void> {
         await driver.removeContainer(bot.containerId).catch(() => {});
       }
 
+      // Ensure bot runner image is present locally; pull automatically if missing or if force-pull requested
+      const configuredImage = config.BOT_RUNNER_IMAGE || 'hypertextassassin/vaultrealm-bot-runner:latest';
+      const candidateImages = Array.from(
+        new Set([
+          configuredImage,
+          'hypertextassassin/vaultrealm-bot-runner:latest',
+          'vaultrealm/bot-runner:latest',
+        ]),
+      );
+
+      const shouldForcePull = Boolean(
+        (request.body as { pull?: boolean } | undefined)?.pull ||
+          (request.query as { pull?: string } | undefined)?.pull === 'true',
+      );
+
+      let imageToUse: string | null = null;
+
+      if (shouldForcePull) {
+        try {
+          console.log(`[bot] Force-pulling latest bot runner image "${configuredImage}"...`);
+          await driver.pullImage(configuredImage);
+          imageToUse = configuredImage;
+          console.log(`[bot] Successfully pulled latest bot runner image: "${configuredImage}".`);
+        } catch (err) {
+          console.warn(`[bot] Force pull of "${configuredImage}" failed, falling back to local image:`, err);
+        }
+      }
+
+      if (!imageToUse) {
+        for (const img of candidateImages) {
+          if (await driver.hasImage(img)) {
+            imageToUse = img;
+            break;
+          }
+        }
+      }
+
+      if (!imageToUse) {
+        let lastPullErr: Error | null = null;
+        for (const img of candidateImages) {
+          try {
+            console.log(`[bot] Bot runner image "${img}" not found locally. Pulling image...`);
+            await driver.pullImage(img);
+            imageToUse = img;
+            console.log(`[bot] Successfully pulled bot runner image: "${img}".`);
+            break;
+          } catch (err) {
+            console.warn(`[bot] Could not pull image "${img}":`, err);
+            lastPullErr = err instanceof Error ? err : new Error(String(err));
+          }
+        }
+
+        if (!imageToUse) {
+          throw new Error(
+            `Failed to pull bot runner image (${candidateImages.join(', ')}): ${lastPullErr?.message || 'Image not found'}. Make sure Docker host has internet access or pull '${configuredImage}' manually.`,
+          );
+        }
+      }
+
+      // 1. Read ops.json from server storage if present to auto-detect server operators
+      let serverOps: string[] = [];
+      try {
+        const serverDir = getServerDataDir(serverId);
+        const opsPath = safepath.resolve(serverDir, 'ops.json');
+        if (fs.existsSync(opsPath)) {
+          const raw = fs.readFileSync(opsPath, 'utf8');
+          const parsed = JSON.parse(raw);
+          if (Array.isArray(parsed)) {
+            serverOps = parsed
+              .map((p) => (typeof p?.name === 'string' ? p.name.trim() : ''))
+              .filter(Boolean);
+          }
+        }
+      } catch {
+        // ignore
+      }
+
+      // 2. Read stored permissions configuration
+      let permissionsConfig: { ownerPlayerName?: string; trustedPlayers?: string[] } = {};
+      try {
+        permissionsConfig = JSON.parse(bot.permissionsJson || '{}');
+      } catch {
+        // ignore
+      }
+
       const userRecord = db.select().from(users).where(eq(users.id, user.id)).all()[0];
-      const ownerName = userRecord?.username ?? 'admin';
+
+      // Effective owner: configured in-game owner > first server op > panel username > 'admin'
+      const ownerName =
+        permissionsConfig.ownerPlayerName?.trim() ||
+        serverOps[0] ||
+        userRecord?.username ||
+        'admin';
+
+      // Effective trusted players: configured trusted + server ops (excluding owner)
+      const configuredTrusted = Array.isArray(permissionsConfig.trustedPlayers)
+        ? permissionsConfig.trustedPlayers
+        : [];
+      const combinedTrusted = Array.from(
+        new Set([...configuredTrusted, ...serverOps]),
+      ).filter((name) => name.toLowerCase() !== ownerName.toLowerCase());
+
+      const whoCanCommand =
+        bot.whoCanCommand === 'owner' || bot.whoCanCommand === 'owner_only'
+          ? 'owner_only'
+          : bot.whoCanCommand === 'trusted'
+            ? 'trusted'
+            : 'everyone';
 
       const containerName = `vaultrealm-bot-${bot.id}`;
       const containerId = await driver.createContainer({
         name: containerName,
-        image: config.BOT_RUNNER_IMAGE,
+        image: imageToUse,
+        extraHosts,
         labels: {
           'vaultrealm.bot': bot.id,
           'vaultrealm.server': serverId,
@@ -228,15 +442,24 @@ export async function botRoutes(app: FastifyInstance): Promise<void> {
           BOT_ID: bot.id,
           BOT_NAME: bot.name,
           SERVER_ID: serverId,
-          SERVER_HOST: server.containerId || 'localhost',
+          SERVER_HOST: serverHost,
           SERVER_PORT: String(serverPort),
           AUTH_MODE: bot.authMode,
           PERSONA: bot.persona,
-          PANEL_GATEWAY_URL: config.PANEL_GATEWAY_URL,
+          PANEL_GATEWAY_URL: panelGatewayUrl,
           BOT_TOKEN: token,
           OWNER_NAME: ownerName,
-          WHO_CAN_COMMAND: bot.whoCanCommand,
+          TRUSTED_PLAYERS: combinedTrusted.join(','),
+          WHO_CAN_COMMAND: whoCanCommand,
           PROTECTED_ZONES_JSON: bot.protectedZonesJson || '[]',
+          MINECRAFT_VERSION: (() => {
+            try {
+              const envMap = JSON.parse(server.envJson || '{}');
+              return envMap.VERSION && envMap.VERSION !== 'LATEST' ? envMap.VERSION : '';
+            } catch {
+              return '';
+            }
+          })(),
         },
         ports: [],
         volumes: [],
@@ -386,6 +609,40 @@ export async function botRoutes(app: FastifyInstance): Promise<void> {
       executedAt: new Date().toISOString(),
     });
   });
+
+  // ── GET /api/servers/:id/companion/bot/logs — container logs ─────────────
+  app.get<{ Params: { id: string }; Querystring: { tail?: string } }>(
+    '/api/servers/:id/companion/bot/logs',
+    async (request, reply) => {
+      const user = getRequestUser(request);
+      const { id: serverId } = request.params;
+      await assertCan(user, 'companion:view', serverId);
+
+      const db = getDatabase();
+      const bot = db.select().from(bots).where(eq(bots.serverId, serverId)).all()[0];
+      if (!bot) {
+        return reply.status(404).send({ code: 'BOT_NOT_FOUND', message: 'No companion bot configured.' });
+      }
+
+      if (!bot.containerId) {
+        return reply.send({ logs: [], containerRunning: false });
+      }
+
+      const driver = getDockerDriver();
+      const tail = request.query.tail ? parseInt(request.query.tail, 10) : 200;
+
+      try {
+        const logs = await driver.getContainerLogs(bot.containerId, tail);
+        return reply.send({ logs, containerRunning: bot.status === 'online' || bot.status === 'joining' });
+      } catch (err: unknown) {
+        const errMsg = err instanceof Error ? err.message : String(err);
+        return reply.send({
+          logs: [`[VaultRealm] Unable to read container logs: ${errMsg}`],
+          containerRunning: false,
+        });
+      }
+    },
+  );
 
   // ── GET /api/servers/:id/companion/bot/usage — daily tokens & budget ──────
   app.get<{ Params: { id: string } }>('/api/servers/:id/companion/bot/usage', async (request, reply) => {

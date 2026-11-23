@@ -11,7 +11,9 @@
     "typecheck": "pnpm -r run typecheck",
     "test": "pnpm -r run test",
     "db:generate": "pnpm --filter @vaultrealm/api run db:generate",
-    "db:migrate": "pnpm --filter @vaultrealm/api run db:migrate"
+    "db:migrate": "pnpm --filter @vaultrealm/api run db:migrate",
+    "docker:build": "docker build -t vaultrealm:latest .",
+    "docker:build:bot": "docker build -f apps/bot-runner/Dockerfile -t vaultrealm/bot-runner:latest ."
   },
   "engines": {
     "node": ">=22.0.0",
