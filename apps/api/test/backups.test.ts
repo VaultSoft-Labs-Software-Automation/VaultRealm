@@ -1,5 +1,6 @@
 import fs from 'node:fs';
 import path from 'node:path';
+import * as tar from 'tar';
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import type { FastifyInstance } from 'fastify';
 import {
@@ -10,6 +11,7 @@ import {
   createInvite,
 } from './helpers.js';
 import { getServerDataDir } from '../src/servers/volume.js';
+import { getBackupsDir } from '../src/backups/service.js';
 import {
   getDockerImageFolderName,
   getOrCreateDriveSubfolder,
@@ -176,6 +178,210 @@ describe('Server Backups & Google Drive Integration', () => {
       });
 
       expect(res.statusCode).toBe(403);
+    });
+  });
+
+  describe('Manual Backup Upload & Local File Restore', () => {
+    it('uploads a backup archive and restores it immediately', async () => {
+      // 1. Create a dummy external directory structure to archive
+      const tempArchiveSource = path.join(getBackupsDir(), 'test_source_upload');
+      fs.mkdirSync(path.join(tempArchiveSource, 'world'), { recursive: true });
+      fs.writeFileSync(
+        path.join(tempArchiveSource, 'world', 'level.dat'),
+        'RESTORED_FROM_UPLOAD_PAYLOAD',
+      );
+      fs.writeFileSync(
+        path.join(tempArchiveSource, 'server.properties'),
+        'motd=RestoredServer\n',
+      );
+
+      const tempTarPath = path.join(getBackupsDir(), 'test_upload.tar.gz');
+      await tar.create(
+        {
+          gzip: true,
+          file: tempTarPath,
+          cwd: tempArchiveSource,
+        },
+        ['world', 'server.properties'],
+      );
+
+      const archiveBuffer = fs.readFileSync(tempTarPath);
+      const contentBase64 = archiveBuffer.toString('base64');
+
+      // Clean up temp source files
+      fs.rmSync(tempArchiveSource, { recursive: true, force: true });
+      fs.unlinkSync(tempTarPath);
+
+      // 2. Upload and restore to server
+      const res = await app.inject({
+        method: 'POST',
+        url: `/api/servers/${serverId}/backups/upload`,
+        cookies: { vr_session: adminCookie },
+        payload: {
+          filename: 'external_world_backup.tar.gz',
+          contentBase64,
+          name: 'Manual Uploaded World',
+          restoreImmediately: true,
+        },
+      });
+
+      expect(res.statusCode).toBe(201);
+      const data = res.json();
+      expect(data.restored).toBe(true);
+      expect(data.backup.name).toBe('Manual Uploaded World');
+      expect(data.backup.localExists).toBe(true);
+
+      // Verify files were actually extracted into server volume
+      const serverDir = getServerDataDir(serverId);
+      const levelDat = fs.readFileSync(path.join(serverDir, 'world', 'level.dat'), 'utf8');
+      expect(levelDat).toBe('RESTORED_FROM_UPLOAD_PAYLOAD');
+      const props = fs.readFileSync(path.join(serverDir, 'server.properties'), 'utf8');
+      expect(props).toBe('motd=RestoredServer\n');
+    });
+
+    it('uploads a backup archive without restoring (saves to snapshots)', async () => {
+      const tempArchiveSource = path.join(getBackupsDir(), 'test_source_saveonly');
+      fs.mkdirSync(tempArchiveSource, { recursive: true });
+      fs.writeFileSync(path.join(tempArchiveSource, 'test.txt'), 'SAVE_ONLY_CONTENT');
+
+      const tempTarPath = path.join(getBackupsDir(), 'test_saveonly.tar.gz');
+      await tar.create({ gzip: true, file: tempTarPath, cwd: tempArchiveSource }, ['test.txt']);
+
+      const contentBase64 = fs.readFileSync(tempTarPath).toString('base64');
+      fs.rmSync(tempArchiveSource, { recursive: true, force: true });
+      fs.unlinkSync(tempTarPath);
+
+      const res = await app.inject({
+        method: 'POST',
+        url: `/api/servers/${serverId}/backups/upload`,
+        cookies: { vr_session: adminCookie },
+        payload: {
+          filename: 'save_only_backup.tar.gz',
+          contentBase64,
+          name: 'Uploaded For Later',
+          restoreImmediately: false,
+        },
+      });
+
+      expect(res.statusCode).toBe(201);
+      const data = res.json();
+      expect(data.restored).toBe(false);
+
+      // Verify server volume was NOT overwritten
+      const serverDir = getServerDataDir(serverId);
+      expect(fs.existsSync(path.join(serverDir, 'test.txt'))).toBe(false);
+
+      // Verify backup is listed
+      const listRes = await app.inject({
+        method: 'GET',
+        url: `/api/servers/${serverId}/backups`,
+        cookies: { vr_session: adminCookie },
+      });
+      const names = listRes.json().backups.map((b: { name: string }) => b.name);
+      expect(names).toContain('Uploaded For Later');
+    });
+
+    it('rejects corrupted or invalid backup files on upload', async () => {
+      const res = await app.inject({
+        method: 'POST',
+        url: `/api/servers/${serverId}/backups/upload`,
+        cookies: { vr_session: adminCookie },
+        payload: {
+          filename: 'invalid.tar.gz',
+          contentBase64: Buffer.from('NOT_A_VALID_GZIP_OR_TAR_DATA').toString('base64'),
+          restoreImmediately: true,
+        },
+      });
+
+      expect(res.statusCode).toBe(400);
+      expect(res.json().code).toBe('INVALID_ARCHIVE');
+    });
+
+    it('lists unindexed backup archives found on disk and restores from them', async () => {
+      // 1. Manually drop an unindexed .tar.gz into backups directory (e.g. copied via SFTP)
+      const tempSource = path.join(getBackupsDir(), 'test_unindexed_src');
+      fs.mkdirSync(tempSource, { recursive: true });
+      fs.writeFileSync(path.join(tempSource, 'unindexed_marker.txt'), 'FOUND_ON_DISK_PAYLOAD');
+
+      const unindexedFilename = 'unindexed_archive_123.tar.gz';
+      const unindexedPath = path.join(getBackupsDir(), unindexedFilename);
+      await tar.create({ gzip: true, file: unindexedPath, cwd: tempSource }, ['unindexed_marker.txt']);
+      fs.rmSync(tempSource, { recursive: true, force: true });
+
+      // 2. Query unindexed backups list
+      const listRes = await app.inject({
+        method: 'GET',
+        url: `/api/servers/${serverId}/backups/unindexed`,
+        cookies: { vr_session: adminCookie },
+      });
+
+      expect(listRes.statusCode).toBe(200);
+      const filenames = listRes.json().unindexed.map((u: { filename: string }) => u.filename);
+      expect(filenames).toContain(unindexedFilename);
+
+      // 3. Restore server from this unindexed file
+      const restoreRes = await app.inject({
+        method: 'POST',
+        url: `/api/servers/${serverId}/backups/restore-file`,
+        cookies: { vr_session: adminCookie },
+        payload: {
+          filename: unindexedFilename,
+          name: 'Restored From Host Disk',
+        },
+      });
+
+      expect(restoreRes.statusCode).toBe(200);
+      expect(restoreRes.json().message).toContain('restored');
+
+      // Verify the file was extracted into the server volume
+      const serverDir = getServerDataDir(serverId);
+      expect(fs.readFileSync(path.join(serverDir, 'unindexed_marker.txt'), 'utf8')).toBe(
+        'FOUND_ON_DISK_PAYLOAD',
+      );
+
+      // Clean up file
+      if (fs.existsSync(unindexedPath)) {
+        fs.unlinkSync(unindexedPath);
+      }
+    });
+
+    it('enforces RBAC permissions on upload and restore-file endpoints', async () => {
+      const inviteRes = await createInvite(app, adminCookie);
+      const { cookies: userCookies } = await registerUser(app, inviteRes.json().code);
+
+      const uploadRes = await app.inject({
+        method: 'POST',
+        url: `/api/servers/${serverId}/backups/upload`,
+        cookies: { vr_session: userCookies['vr_session']! },
+        payload: {
+          filename: 'test.tar.gz',
+          contentBase64: 'dGVzdA==',
+        },
+      });
+      expect(uploadRes.statusCode).toBe(403);
+
+      const restoreFileRes = await app.inject({
+        method: 'POST',
+        url: `/api/servers/${serverId}/backups/restore-file`,
+        cookies: { vr_session: userCookies['vr_session']! },
+        payload: {
+          filename: 'some_file.tar.gz',
+        },
+      });
+      expect(restoreFileRes.statusCode).toBe(403);
+    });
+
+    it('rejects path traversal attempts on restore-file', async () => {
+      const res = await app.inject({
+        method: 'POST',
+        url: `/api/servers/${serverId}/backups/restore-file`,
+        cookies: { vr_session: adminCookie },
+        payload: {
+          filename: '../../etc/shadow.tar.gz',
+        },
+      });
+      expect(res.statusCode).toBe(403);
+      expect(res.json().code).toBe('FORBIDDEN_PATH');
     });
   });
 

@@ -9,6 +9,15 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { getServerDataDir } from './volume.js';
 import { safepath } from '../safepath.js';
+import {
+  installMrpack,
+  isMrpackBuffer,
+  getInstalledModpack,
+  type InstallMrpackResult,
+  type InstalledModpackInfo,
+} from './mrpack.js';
+
+export { getInstalledModpack, type InstalledModpackInfo, type InstallMrpackResult };
 
 export interface InstalledMod {
   filename: string;
@@ -16,6 +25,17 @@ export interface InstalledMod {
   enabled: boolean;
   modifiedAt: string;
 }
+
+export type InstallModResult =
+  | {
+      isMrpack?: false;
+      filename: string;
+      sizeBytes: number;
+    }
+  | (InstallMrpackResult & {
+      filename: string;
+      sizeBytes: number;
+    });
 
 export function getAddonsFolder(templateId: string): string {
   // Paper, Purpur, Spigot use 'plugins', while Fabric, Forge, NeoForge, Quilt use 'mods'
@@ -130,7 +150,7 @@ export async function installModFromUrl(
   templateId: string,
   downloadUrl: string,
   rawFilename: string,
-): Promise<{ filename: string; sizeBytes: number }> {
+): Promise<InstallModResult> {
   // Validate URL protocol
   const parsed = new URL(downloadUrl);
   if (parsed.protocol !== 'http:' && parsed.protocol !== 'https:') {
@@ -139,15 +159,6 @@ export async function installModFromUrl(
     (error as Error & { statusCode: number }).statusCode = 400;
     throw error;
   }
-
-  // Clean filename and ensure it ends with .jar
-  let filename = path.basename(rawFilename).replace(/[^a-zA-Z0-9_\-.+]/g, '_');
-  if (!filename.endsWith('.jar')) {
-    filename += '.jar';
-  }
-
-  const modsDir = getModsDirectory(serverId, templateId);
-  const targetPath = safepath.resolve(modsDir, filename);
 
   const res = await fetch(downloadUrl, {
     headers: {
@@ -165,6 +176,29 @@ export async function installModFromUrl(
 
   const arrayBuffer = await res.arrayBuffer();
   const buffer = Buffer.from(arrayBuffer);
+
+  const isMrpack =
+    rawFilename.toLowerCase().endsWith('.mrpack') ||
+    parsed.pathname.toLowerCase().endsWith('.mrpack') ||
+    isMrpackBuffer(buffer);
+
+  if (isMrpack) {
+    const mrpackResult = await installMrpack(serverId, templateId, buffer);
+    return {
+      filename: rawFilename,
+      sizeBytes: buffer.length,
+      ...mrpackResult,
+    };
+  }
+
+  // Clean filename and ensure it ends with .jar
+  let filename = path.basename(rawFilename).replace(/[^a-zA-Z0-9_\-.+]/g, '_');
+  if (!filename.endsWith('.jar')) {
+    filename += '.jar';
+  }
+
+  const modsDir = getModsDirectory(serverId, templateId);
+  const targetPath = safepath.resolve(modsDir, filename);
 
   await fs.promises.writeFile(targetPath, buffer);
 
@@ -231,15 +265,7 @@ export async function saveUploadedMod(
   templateId: string,
   rawFilename: string,
   contentBase64: string,
-): Promise<{ filename: string; sizeBytes: number }> {
-  let filename = path.basename(rawFilename).replace(/[^a-zA-Z0-9_\-.+]/g, '_');
-  if (!filename.endsWith('.jar') && !filename.endsWith('.jar.disabled')) {
-    filename += '.jar';
-  }
-
-  const modsDir = getModsDirectory(serverId, templateId);
-  const targetPath = safepath.resolve(modsDir, filename);
-
+): Promise<InstallModResult> {
   const buffer = Buffer.from(contentBase64, 'base64');
   if (buffer.length === 0) {
     const error = new Error('Uploaded file is empty.');
@@ -254,6 +280,27 @@ export async function saveUploadedMod(
     (error as Error & { statusCode: number }).statusCode = 400;
     throw error;
   }
+
+  const isMrpack =
+    rawFilename.toLowerCase().endsWith('.mrpack') ||
+    isMrpackBuffer(buffer);
+
+  if (isMrpack) {
+    const mrpackResult = await installMrpack(serverId, templateId, buffer);
+    return {
+      filename: rawFilename,
+      sizeBytes: buffer.length,
+      ...mrpackResult,
+    };
+  }
+
+  let filename = path.basename(rawFilename).replace(/[^a-zA-Z0-9_\-.+]/g, '_');
+  if (!filename.endsWith('.jar') && !filename.endsWith('.jar.disabled')) {
+    filename += '.jar';
+  }
+
+  const modsDir = getModsDirectory(serverId, templateId);
+  const targetPath = safepath.resolve(modsDir, filename);
 
   await fs.promises.writeFile(targetPath, buffer);
 

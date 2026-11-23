@@ -375,6 +375,106 @@ vr_diag() {
   echo ""
 }
 
+vr_backup() {
+  local SERVER_ID="${1:-}"
+  local SERVERS_DIR="${DATA_DIR}/servers"
+  local BACKUPS_DIR="${DATA_DIR}/backups"
+  mkdir -p "$BACKUPS_DIR"
+
+  if [ -z "$SERVER_ID" ]; then
+    echo -e "\n${BOLD}Available Game Servers:${NC}"
+    if [ ! -d "$SERVERS_DIR" ] || [ -z "$(ls -A "$SERVERS_DIR" 2>/dev/null)" ]; then
+      echo -e "${YELLOW}No servers found in ${SERVERS_DIR}.${NC}"
+      return
+    fi
+    ls -1 "$SERVERS_DIR"
+    echo ""
+    read -r -p "Enter Server ID to backup: " SERVER_ID
+  fi
+
+  if [ -z "$SERVER_ID" ] || [ ! -d "${SERVERS_DIR}/${SERVER_ID}" ]; then
+    echo -e "${RED}Server directory not found: ${SERVERS_DIR}/${SERVER_ID}${NC}"
+    return
+  fi
+
+  local TIMESTAMP
+  TIMESTAMP="$(date +%Y%m%d_%H%M%S)"
+  local ARCHIVE_NAME="${SERVER_ID}_manual_${TIMESTAMP}.tar.gz"
+  local ARCHIVE_PATH="${BACKUPS_DIR}/${ARCHIVE_NAME}"
+
+  echo -e "${CYAN}Creating backup archive for server '${SERVER_ID}'...${NC}"
+  tar -czf "$ARCHIVE_PATH" -C "${SERVERS_DIR}/${SERVER_ID}" .
+  local SIZE
+  SIZE="$(du -h "$ARCHIVE_PATH" | cut -f1)"
+  echo -e "${GREEN}✔ Backup created successfully!${NC}"
+  echo -e "  File: ${BOLD}${ARCHIVE_PATH}${NC}"
+  echo -e "  Size: ${SIZE}"
+}
+
+vr_restore() {
+  local SERVER_ID="${1:-}"
+  local ARCHIVE_PATH="${2:-}"
+  local SERVERS_DIR="${DATA_DIR}/servers"
+  local BACKUPS_DIR="${DATA_DIR}/backups"
+
+  if [ -z "$SERVER_ID" ]; then
+    echo -e "\n${BOLD}Available Game Servers:${NC}"
+    if [ ! -d "$SERVERS_DIR" ] || [ -z "$(ls -A "$SERVERS_DIR" 2>/dev/null)" ]; then
+      echo -e "${YELLOW}No servers found in ${SERVERS_DIR}.${NC}"
+      return
+    fi
+    ls -1 "$SERVERS_DIR"
+    echo ""
+    read -r -p "Enter Server ID to restore: " SERVER_ID
+  fi
+
+  if [ -z "$SERVER_ID" ] || [ ! -d "${SERVERS_DIR}/${SERVER_ID}" ]; then
+    echo -e "${RED}Server directory not found: ${SERVERS_DIR}/${SERVER_ID}${NC}"
+    return
+  fi
+
+  if [ -z "$ARCHIVE_PATH" ]; then
+    echo -e "\n${BOLD}Available Backups in ${BACKUPS_DIR}:${NC}"
+    if [ -d "$BACKUPS_DIR" ]; then
+      ls -1 "${BACKUPS_DIR}"/*.tar.gz 2>/dev/null || echo "No .tar.gz archives found."
+    fi
+    echo ""
+    read -r -p "Enter path to backup archive (.tar.gz): " ARCHIVE_PATH
+  fi
+
+  if [ ! -f "$ARCHIVE_PATH" ]; then
+    echo -e "${RED}Archive file not found: ${ARCHIVE_PATH}${NC}"
+    return
+  fi
+
+  echo -e "${YELLOW}${BOLD}WARNING: Restoring will overwrite existing files in ${SERVERS_DIR}/${SERVER_ID}.${NC}"
+  read -r -p "Are you sure you want to proceed with restore? [y/N]: " CONFIRM
+  if [[ ! "$CONFIRM" =~ ^[Yy]$ ]]; then
+    echo "Restore cancelled."
+    return
+  fi
+
+  # Check if container is running
+  local CONTAINER_ID
+  CONTAINER_ID="$(docker ps -q --filter "label=vaultrealm=true" --filter "name=${SERVER_ID}" 2>/dev/null || true)"
+  local WAS_RUNNING=false
+  if [ -n "$CONTAINER_ID" ]; then
+    WAS_RUNNING=true
+    echo -e "${CYAN}Stopping server container temporarily...${NC}"
+    docker stop "$CONTAINER_ID" >/dev/null 2>&1 || true
+  fi
+
+  echo -e "${CYAN}Extracting backup archive to ${SERVERS_DIR}/${SERVER_ID}...${NC}"
+  tar -xzf "$ARCHIVE_PATH" -C "${SERVERS_DIR}/${SERVER_ID}"
+
+  if [ "$WAS_RUNNING" = true ]; then
+    echo -e "${CYAN}Restarting server container...${NC}"
+    docker start "$CONTAINER_ID" >/dev/null 2>&1 || true
+  fi
+
+  echo -e "${GREEN}✔ Server '${SERVER_ID}' restored successfully from ${ARCHIVE_PATH}!${NC}"
+}
+
 vr_reset() {
   echo -e "${YELLOW}WARNING: This resets the initial setup status so you can register a new admin account.${NC}"
   read -r -p "Are you sure? [y/N]: " CONFIRM
@@ -446,12 +546,14 @@ BANNER_EOF
   echo "  6. Change Web Port (Current: ${PORT})"
   echo "  7. Update Panel to Latest Version"
   echo "  8. System Diagnostics & Game Servers"
-  echo "  9. Reset First-Time Admin Setup"
-  echo " 10. Uninstall VaultRealm"
+  echo "  9. Create Manual Server Backup"
+  echo " 10. Restore Server from Backup Archive"
+  echo " 11. Reset First-Time Admin Setup"
+  echo " 12. Uninstall VaultRealm"
   echo " --------------------------------------------------------"
   echo "  0. Exit"
   echo ""
-  read -r -p "Select option [0-10]: " CHOICE
+  read -r -p "Select option [0-12]: " CHOICE
   case "$CHOICE" in
     1) vr_start ;;
     2) vr_stop ;;
@@ -461,8 +563,10 @@ BANNER_EOF
     6) vr_port ;;
     7) vr_update ;;
     8) vr_diag ;;
-    9) vr_reset ;;
-    10) vr_uninstall ;;
+    9) vr_backup ;;
+    10) vr_restore ;;
+    11) vr_reset ;;
+    12) vr_uninstall ;;
     0) exit 0 ;;
     *) echo -e "${RED}Invalid option.${NC}" ;;
   esac
@@ -477,10 +581,12 @@ case "${1:-}" in
   port) vr_port ;;
   update) vr_update "${2:-latest}" ;;
   diag) vr_diag ;;
+  backup) vr_backup "${2:-}" ;;
+  restore) vr_restore "${2:-}" "${3:-}" ;;
   reset) vr_reset ;;
   uninstall) vr_uninstall ;;
   help|--help|-h)
-    echo "Usage: vaultrealm [start|stop|restart|status|logs|port|update|diag|reset|uninstall]"
+    echo "Usage: vaultrealm [start|stop|restart|status|logs|port|update|diag|backup|restore|reset|uninstall]"
     ;;
   *)
     show_menu

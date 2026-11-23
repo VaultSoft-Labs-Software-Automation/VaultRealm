@@ -5,6 +5,7 @@ import {
   type BackupDetail,
   type PublicGoogleDriveConfig,
   type ApiError,
+  type UnindexedBackup,
 } from '../api/client';
 import { useToast } from './Toast';
 import { useConfirm } from './ConfirmModal';
@@ -37,8 +38,30 @@ export function ServerBackupsTab({
   const [backupName, setBackupName] = useState('');
   const [uploadToDrive, setUploadToDrive] = useState(false);
 
+  // Manual upload & restore state
+  const [showUploadModal, setShowUploadModal] = useState(false);
+  const [uploadFile, setUploadFile] = useState<File | null>(null);
+  const [uploadName, setUploadName] = useState('');
+  const [restoreImmediately, setRestoreImmediately] = useState(true);
+  const [isUploading, setIsUploading] = useState(false);
+  const [unindexedBackups, setUnindexedBackups] = useState<UnindexedBackup[]>([]);
+  const [loadingUnindexed, setLoadingUnindexed] = useState(false);
+  const [restoringFilename, setRestoringFilename] = useState<string | null>(null);
+
   const { addToast } = useToast();
   const { confirm, ConfirmDialog } = useConfirm();
+
+  const loadUnindexed = useCallback(async () => {
+    try {
+      setLoadingUnindexed(true);
+      const res = await api.getUnindexedBackups(serverId);
+      setUnindexedBackups(res.unindexed);
+    } catch {
+      // ignore
+    } finally {
+      setLoadingUnindexed(false);
+    }
+  }, [serverId]);
 
   const loadData = useCallback(async () => {
     try {
@@ -81,6 +104,132 @@ export function ServerBackupsTab({
     setBackupName(defaultName);
     setUploadToDrive(Boolean(gdriveConfig?.configured));
     setShowCreateModal(true);
+  };
+
+  const readFileAsBase64 = (file: File): Promise<string> => {
+    return new Promise((resolve, reject) => {
+      const reader = new FileReader();
+      reader.onload = () => {
+        const result = reader.result as string;
+        const base64 = result.includes(',') ? result.split(',')[1] : result;
+        resolve(base64);
+      };
+      reader.onerror = (err) => reject(err);
+      reader.readAsDataURL(file);
+    });
+  };
+
+  const handleOpenUploadModal = () => {
+    setUploadFile(null);
+    setUploadName('');
+    setRestoreImmediately(true);
+    setShowUploadModal(true);
+    void loadUnindexed();
+  };
+
+  const handleFileChange = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+    setUploadFile(file);
+    const defaultName = file.name
+      .replace(/\.tar\.gz$/, '')
+      .replace(/\.tgz$/, '')
+      .replace(/[^a-zA-Z0-9_\- ]/g, '_');
+    setUploadName(defaultName);
+  };
+
+  const handleUploadAndRestore = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!uploadFile) {
+      addToast({ type: 'error', title: 'No file selected', message: 'Please select a .tar.gz backup archive.' });
+      return;
+    }
+
+    if (uploadFile.size > 500 * 1024 * 1024) {
+      addToast({ type: 'error', title: 'File too large', message: 'Backup file exceeds maximum limit of 500 MB.' });
+      return;
+    }
+
+    if (restoreImmediately) {
+      const ok = await confirm({
+        title: `Restore Backup: ${uploadName || uploadFile.name}?`,
+        message:
+          'Restoring this uploaded backup will replace all current server files and world data. The container will be stopped during extraction and restarted. Are you sure you want to proceed?',
+        confirmLabel: 'Upload & Restore',
+        variant: 'warning',
+      });
+      if (!ok) return;
+    }
+
+    setIsUploading(true);
+    try {
+      addToast({ type: 'info', title: 'Reading archive...', message: 'Preparing archive for upload...' });
+      const base64 = await readFileAsBase64(uploadFile);
+
+      addToast({
+        type: 'info',
+        title: restoreImmediately ? 'Uploading & Restoring...' : 'Uploading backup...',
+        message: 'This may take a moment depending on file size...',
+      });
+
+      const res = await api.uploadAndRestoreServerBackup(serverId, {
+        filename: uploadFile.name,
+        contentBase64: base64,
+        name: uploadName.trim() || undefined,
+        restoreImmediately,
+      });
+
+      addToast({
+        type: 'success',
+        title: res.restored ? 'Server restored successfully!' : 'Backup uploaded!',
+        message: res.message || (res.restored ? 'World volume restored and container restarted.' : 'Archive added to snapshot history.'),
+      });
+
+      setShowUploadModal(false);
+      setUploadFile(null);
+      await loadData();
+    } catch (err) {
+      const error = err as ApiError;
+      addToast({
+        type: 'error',
+        title: 'Restore failed',
+        message: error.message || 'Could not upload and extract backup.',
+      });
+    } finally {
+      setIsUploading(false);
+    }
+  };
+
+  const handleRestoreFromUnindexed = async (filename: string) => {
+    const ok = await confirm({
+      title: `Restore from disk: ${filename}?`,
+      message:
+        'This unindexed archive was found in the server backups folder. Restoring will replace current server files and restart the container. Proceed?',
+      confirmLabel: 'Restore Archive',
+      variant: 'warning',
+    });
+    if (!ok) return;
+
+    setRestoringFilename(filename);
+    try {
+      const res = await api.restoreServerFromFile(serverId, { filename });
+      addToast({
+        type: 'success',
+        title: 'Server restored successfully!',
+        message: res.message || 'Server files restored from local archive.',
+      });
+      setShowUploadModal(false);
+      await loadData();
+    } catch (err) {
+      const error = err as ApiError;
+      addToast({
+        type: 'error',
+        title: 'Restore failed',
+        message: error.message || 'Failed to restore server from file.',
+      });
+    } finally {
+      setRestoringFilename(null);
+    }
   };
 
   const handleCreateBackup = async (e: React.FormEvent) => {
@@ -256,7 +405,7 @@ export function ServerBackupsTab({
             </p>
           </div>
 
-          <div className="flex items-center gap-2.5 shrink-0">
+          <div className="flex items-center gap-2.5 shrink-0 flex-wrap">
             <button
               onClick={() => void loadData()}
               disabled={loading}
@@ -266,8 +415,17 @@ export function ServerBackupsTab({
               🔄 Refresh
             </button>
             <button
+              onClick={handleOpenUploadModal}
+              disabled={creating || restoringId !== null || isUploading}
+              className="btn btn-secondary btn-sm py-2 px-3.5 font-bold text-xs flex items-center gap-1.5 cursor-pointer border-border hover:border-primary/50"
+              title="Upload an external backup or restore from server disk"
+            >
+              <span>📥</span>
+              <span>Upload & Restore</span>
+            </button>
+            <button
               onClick={handleOpenCreateModal}
-              disabled={creating || restoringId !== null}
+              disabled={creating || restoringId !== null || isUploading}
               className="btn btn-primary btn-sm py-2 px-4 font-bold text-xs flex items-center gap-1.5 cursor-pointer shadow-lg shadow-primary/20"
             >
               <span>💾</span>
@@ -548,6 +706,195 @@ export function ServerBackupsTab({
                 >
                   {creating && <span className="animate-spin text-xs">⟳</span>}
                   <span>{creating ? 'Compressing & Archiving...' : 'Create Backup'}</span>
+                </button>
+              </div>
+            </form>
+          </div>
+        </div>
+      )}
+
+      {/* Upload & Restore Modal */}
+      {showUploadModal && (
+        <div className="fixed inset-0 z-[100] flex items-center justify-center bg-black/80 backdrop-blur-md animate-fade-in p-4 overflow-y-auto">
+          <div className="card max-w-lg w-full p-0 border border-border shadow-2xl overflow-hidden my-8">
+            <div className="h-1 w-full bg-gradient-to-r from-emerald-500 via-primary to-blue-500" />
+            <div className="p-6 border-b border-border/60 flex items-center justify-between">
+              <div className="flex items-center gap-3">
+                <div className="w-10 h-10 rounded-xl bg-primary/10 border border-primary/30 flex items-center justify-center text-xl">
+                  📥
+                </div>
+                <div>
+                  <h3 className="text-base font-bold text-foreground">Manual Backup Restore</h3>
+                  <p className="text-xs text-muted-foreground">
+                    Upload an external archive or restore from local disk
+                  </p>
+                </div>
+              </div>
+              <button
+                onClick={() => setShowUploadModal(false)}
+                className="btn btn-ghost btn-sm text-lg text-muted-foreground hover:text-foreground"
+              >
+                ✕
+              </button>
+            </div>
+
+            <form onSubmit={handleUploadAndRestore} className="p-6 space-y-4">
+              {/* File Upload Zone */}
+              <div>
+                <label className="block text-xs font-semibold text-foreground mb-1.5">
+                  Select Backup Archive (.tar.gz / .tgz)
+                </label>
+                <div className="relative border-2 border-dashed border-border hover:border-primary/50 rounded-xl p-5 text-center bg-card-subtle transition-all cursor-pointer">
+                  <input
+                    type="file"
+                    accept=".tar.gz,.tgz,.tar"
+                    onChange={handleFileChange}
+                    className="absolute inset-0 w-full h-full opacity-0 cursor-pointer"
+                  />
+                  {uploadFile ? (
+                    <div className="space-y-1">
+                      <div className="text-2xl">📦</div>
+                      <p className="text-xs font-bold text-foreground truncate max-w-sm mx-auto">
+                        {uploadFile.name}
+                      </p>
+                      <p className="text-[11px] text-muted-foreground font-mono">
+                        {formatBytes(uploadFile.size)}
+                      </p>
+                      <span className="inline-block mt-1 text-[10px] text-primary underline">
+                        Click to choose a different file
+                      </span>
+                    </div>
+                  ) : (
+                    <div className="space-y-1.5 py-2">
+                      <div className="text-2xl text-muted-foreground">📁</div>
+                      <p className="text-xs text-foreground font-medium">
+                        Drag and drop a <code>.tar.gz</code> archive here, or browse
+                      </p>
+                      <p className="text-[11px] text-muted-foreground">
+                        Supports full VaultRealm server snapshots and standard server backups
+                      </p>
+                    </div>
+                  )}
+                </div>
+              </div>
+
+              {/* Snapshot Name */}
+              {uploadFile && (
+                <div>
+                  <label className="block text-xs font-semibold text-foreground mb-1">
+                    Snapshot Name
+                  </label>
+                  <input
+                    type="text"
+                    value={uploadName}
+                    onChange={(e) => setUploadName(e.target.value)}
+                    placeholder="e.g. Migrated-World-Save"
+                    maxLength={80}
+                    className="input w-full text-xs"
+                  />
+                </div>
+              )}
+
+              {/* Restore Option */}
+              <div className="p-3.5 rounded-xl border border-border bg-card-subtle space-y-2">
+                <label className="flex items-start gap-3 cursor-pointer">
+                  <input
+                    type="checkbox"
+                    checked={restoreImmediately}
+                    onChange={(e) => setRestoreImmediately(e.target.checked)}
+                    className="mt-0.5 rounded border-border"
+                  />
+                  <div className="space-y-0.5 text-xs">
+                    <span className="font-semibold text-foreground flex items-center gap-1.5">
+                      <span>⚡ Restore server immediately</span>
+                    </span>
+                    <p className="text-muted-foreground text-[11px]">
+                      Extracts this archive over server volume.
+                      The container will be paused, files replaced, and container restarted.
+                    </p>
+                  </div>
+                </label>
+              </div>
+
+              {/* Warning */}
+              {restoreImmediately && (
+                <div className="p-3 rounded-lg bg-amber-500/10 border border-amber-500/20 text-[11px] text-amber-300 flex items-start gap-2">
+                  <span>⚠️</span>
+                  <span>
+                    Existing world files and configs will be overwritten by this snapshot. Unsaved progress will be replaced.
+                  </span>
+                </div>
+              )}
+
+              {/* Unindexed Archives on Server Disk Section */}
+              {loadingUnindexed ? (
+                <div className="pt-3 border-t border-border/60 py-2 text-center text-xs text-muted-foreground flex items-center justify-center gap-1.5">
+                  <span className="animate-spin text-xs text-primary">⟳</span>
+                  <span>Scanning server backups folder on disk...</span>
+                </div>
+              ) : unindexedBackups.length > 0 ? (
+                <div className="pt-3 border-t border-border/60 space-y-2">
+                  <div className="flex items-center justify-between">
+                    <h4 className="text-xs font-bold text-foreground flex items-center gap-1.5">
+                      <span>💾</span>
+                      <span>Found on Server Backups Folder</span>
+                    </h4>
+                    <span className="badge badge-neutral text-[10px] py-0 px-2 font-mono">
+                      {unindexedBackups.length} file{unindexedBackups.length === 1 ? '' : 's'}
+                    </span>
+                  </div>
+                  <p className="text-[11px] text-muted-foreground">
+                    Archives detected directly on disk in <code>/srv/vaultrealm/data/backups/</code>:
+                  </p>
+                  <div className="space-y-1.5 max-h-36 overflow-y-auto pr-1">
+                    {unindexedBackups.map((u) => (
+                      <div
+                        key={u.filename}
+                        className="p-2 rounded-lg border border-border bg-card flex items-center justify-between gap-2 text-[11px]"
+                      >
+                        <div className="min-w-0 flex-1">
+                          <p className="font-mono text-foreground truncate font-semibold">
+                            {u.filename}
+                          </p>
+                          <p className="text-[10px] text-muted-foreground">
+                            {formatBytes(u.sizeBytes)} &bull; {new Date(u.modifiedAt).toLocaleDateString()}
+                          </p>
+                        </div>
+                        <button
+                          type="button"
+                          onClick={() => handleRestoreFromUnindexed(u.filename)}
+                          disabled={restoringFilename === u.filename || isUploading}
+                          className="btn btn-secondary btn-sm text-[10px] py-1 px-2.5 font-bold cursor-pointer shrink-0"
+                        >
+                          {restoringFilename === u.filename ? 'Restoring...' : 'Restore This 🔄'}
+                        </button>
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              ) : null}
+
+              <div className="flex items-center justify-end gap-2 pt-4 border-t border-border/60">
+                <button
+                  type="button"
+                  onClick={() => setShowUploadModal(false)}
+                  className="btn btn-secondary text-xs py-2 px-4"
+                >
+                  Cancel
+                </button>
+                <button
+                  type="submit"
+                  disabled={!uploadFile || isUploading}
+                  className="btn btn-primary text-xs py-2 px-5 font-bold cursor-pointer flex items-center gap-1.5"
+                >
+                  {isUploading && <span className="animate-spin text-xs">⟳</span>}
+                  <span>
+                    {isUploading
+                      ? 'Uploading & Processing...'
+                      : restoreImmediately
+                        ? 'Upload & Restore'
+                        : 'Upload Archive Only'}
+                  </span>
                 </button>
               </div>
             </form>

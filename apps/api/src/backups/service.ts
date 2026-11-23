@@ -18,11 +18,18 @@ import { getDockerDriver } from '../servers/service.js';
 import { executeServerCommand } from '../servers/console.js';
 import { getTemplate } from '../servers/templates.js';
 import { writeAudit } from '../audit/log.js';
+import { safepath } from '../safepath.js';
 import {
   uploadToGoogleDrive,
   downloadFromGoogleDrive,
   deleteFromGoogleDrive,
 } from './gdrive.js';
+
+export interface UnindexedBackup {
+  filename: string;
+  sizeBytes: number;
+  modifiedAt: string;
+}
 
 export interface BackupDetail {
   id: string;
@@ -233,6 +240,89 @@ export async function listServerBackups(serverId: string): Promise<BackupDetail[
 }
 
 /**
+ * Internal helper to safely extract an archive over a server's data volume.
+ * Handles stopping container, tar extraction, restarting, and audit logging.
+ */
+export async function restoreServerFromArchiveFile(
+  serverId: string,
+  archivePath: string,
+  userId: string,
+  ip?: string,
+  backupId?: string,
+): Promise<void> {
+  const db = getDatabase();
+  const driver = getDockerDriver();
+
+  const server = db.select().from(servers).where(eq(servers.id, serverId)).all()[0];
+  if (!server) {
+    throw makeError(404, 'NOT_FOUND', 'Server not found.');
+  }
+
+  if (!fs.existsSync(archivePath)) {
+    throw makeError(404, 'NOT_FOUND', 'Backup archive file does not exist.');
+  }
+
+  // Verify archive integrity
+  try {
+    await tar.t({ file: archivePath });
+  } catch (err) {
+    throw makeError(400, 'INVALID_ARCHIVE', `Corrupted or invalid tar.gz archive: ${err instanceof Error ? err.message : String(err)}`);
+  }
+
+  const wasRunning = server.status === 'running' && server.containerId;
+
+  // Stop container before replacing files to prevent state corruption
+  if (server.containerId) {
+    try {
+      await driver.stopContainer(server.containerId, 10);
+    } catch {
+      // ignore if already stopped
+    }
+  }
+
+  const serverDir = getServerDataDir(serverId);
+  if (!fs.existsSync(serverDir)) {
+    fs.mkdirSync(serverDir, { recursive: true });
+  }
+
+  // Extract snapshot over the target server directory
+  try {
+    await tar.extract({
+      file: archivePath,
+      cwd: serverDir,
+      strict: true,
+    });
+  } catch (err) {
+    throw makeError(
+      400,
+      'INVALID_ARCHIVE',
+      `Failed to extract archive: ${err instanceof Error ? err.message : String(err)}`,
+    );
+  }
+
+  // Restart container if it was running previously
+  if (wasRunning && server.containerId) {
+    try {
+      await driver.startContainer(server.containerId);
+      db.update(servers).set({ status: 'running' }).where(eq(servers.id, serverId)).run();
+    } catch (err) {
+      console.warn(`[backups] Could not restart container after restore for ${serverId}:`, err);
+    }
+  }
+
+  writeAudit({
+    userId,
+    action: 'server.backup.restore',
+    target: serverId,
+    ip,
+    data: {
+      backupId: backupId || 'manual',
+      filename: path.basename(archivePath),
+    },
+  });
+}
+
+/**
  * Restore a server to a previous backup snapshot.
  */
 export async function restoreServerBackup(
@@ -242,7 +332,6 @@ export async function restoreServerBackup(
   ip?: string,
 ): Promise<void> {
   const db = getDatabase();
-  const driver = getDockerDriver();
 
   const server = db.select().from(servers).where(eq(servers.id, serverId)).all()[0];
   if (!server) {
@@ -263,45 +352,233 @@ export async function restoreServerBackup(
     }
   }
 
-  const wasRunning = server.status === 'running' && server.containerId;
+  await restoreServerFromArchiveFile(serverId, backup.path, userId, ip, backupId);
+}
 
-  // Stop container before replacing files to prevent state corruption
-  if (server.containerId) {
+/**
+ * Upload an external backup file (.tar.gz), save to backups directory,
+ * register it in the database, and optionally restore immediately.
+ */
+export async function uploadAndRestoreServerBackup(
+  serverId: string,
+  userId: string,
+  opts: {
+    filename: string;
+    contentBase64: string;
+    name?: string;
+    restoreImmediately?: boolean;
+  },
+  ip?: string,
+): Promise<{ backup: BackupDetail; restored: boolean }> {
+  const db = getDatabase();
+  const server = db.select().from(servers).where(eq(servers.id, serverId)).all()[0];
+  if (!server) {
+    throw makeError(404, 'NOT_FOUND', 'Server not found.');
+  }
+
+  let cleanName = path.basename(opts.filename).replace(/[^a-zA-Z0-9_\-.+]/g, '_');
+  if (!cleanName.endsWith('.tar.gz') && !cleanName.endsWith('.tgz')) {
+    cleanName += '.tar.gz';
+  }
+
+  const backupId = nanoid();
+  const sanitizedServerName = server.name.replace(/[^a-zA-Z0-9_-]/g, '_');
+  const targetFilename = `${sanitizedServerName}_upload_${backupId}_${cleanName}`;
+  const targetPath = safepath.resolve(getBackupsDir(), targetFilename);
+
+  const buffer = Buffer.from(opts.contentBase64, 'base64');
+  if (buffer.length === 0) {
+    throw makeError(400, 'EMPTY_FILE', 'Uploaded backup file is empty.');
+  }
+  if (buffer.length > 500 * 1024 * 1024) {
+    throw makeError(400, 'FILE_TOO_LARGE', 'Uploaded backup file exceeds maximum limit of 500 MB.');
+  }
+
+  // Validate gzip magic bytes (0x1f 0x8b) for .tar.gz / .tgz files
+  const isGzip = buffer.length >= 2 && buffer[0] === 0x1f && buffer[1] === 0x8b;
+  if (!isGzip) {
+    throw makeError(400, 'INVALID_ARCHIVE', 'The uploaded file is not a valid tar.gz archive.');
+  }
+
+  await fs.promises.writeFile(targetPath, buffer);
+
+  // Validate archive integrity before registering or extracting
+  try {
+    await tar.t({ file: targetPath, strict: true });
+  } catch {
+    await fs.promises.unlink(targetPath).catch(() => {});
+    throw makeError(400, 'INVALID_ARCHIVE', 'The uploaded file is not a valid tar.gz archive.');
+  }
+
+  const stat = await fs.promises.stat(targetPath);
+  const now = new Date().toISOString();
+  const displayName = opts.name?.trim() || cleanName.replace(/\.tar\.gz$/, '').replace(/\.tgz$/, '');
+
+  db.insert(backups)
+    .values({
+      id: backupId,
+      serverId,
+      createdAt: now,
+      sizeBytes: stat.size,
+      path: targetPath,
+      kind: 'manual',
+      name: displayName,
+      gdriveFileId: null,
+      gdriveWebLink: null,
+    })
+    .run();
+
+  const backupDetail: BackupDetail = {
+    id: backupId,
+    serverId,
+    name: displayName,
+    createdAt: now,
+    sizeBytes: stat.size,
+    path: targetPath,
+    kind: 'manual',
+    gdriveFileId: null,
+    gdriveWebLink: null,
+    localExists: true,
+    gdriveSynced: false,
+  };
+
+  const shouldRestore = opts.restoreImmediately !== false;
+  if (shouldRestore) {
+    await restoreServerFromArchiveFile(serverId, targetPath, userId, ip, backupId);
+  } else {
+    writeAudit({
+      userId,
+      action: 'server.backup.upload',
+      target: serverId,
+      ip,
+      data: { backupId, filename: targetFilename, sizeBytes: stat.size },
+    });
+  }
+
+  return {
+    backup: backupDetail,
+    restored: shouldRestore,
+  };
+}
+
+/**
+ * List .tar.gz archives in the backups directory that are not registered
+ * in the database for the given server.
+ */
+export async function listUnindexedBackups(serverId: string): Promise<UnindexedBackup[]> {
+  const db = getDatabase();
+  const server = db.select().from(servers).where(eq(servers.id, serverId)).all()[0];
+  if (!server) {
+    throw makeError(404, 'NOT_FOUND', 'Server not found.');
+  }
+
+  const dir = getBackupsDir();
+  if (!fs.existsSync(dir)) return [];
+
+  const existingBackups = db.select().from(backups).all();
+  const registeredPaths = new Set(existingBackups.map((b) => path.resolve(b.path)));
+
+  const entries = await fs.promises.readdir(dir, { withFileTypes: true });
+  const result: UnindexedBackup[] = [];
+
+  for (const entry of entries) {
+    if (!entry.isFile()) continue;
+    if (!entry.name.endsWith('.tar.gz') && !entry.name.endsWith('.tgz')) continue;
+
+    const fullPath = path.resolve(dir, entry.name);
+    if (registeredPaths.has(fullPath)) continue;
+
     try {
-      await driver.stopContainer(server.containerId, 10);
+      const stat = await fs.promises.stat(fullPath);
+      result.push({
+        filename: entry.name,
+        sizeBytes: stat.size,
+        modifiedAt: stat.mtime.toISOString(),
+      });
     } catch {
-      // ignore if already stopped
+      // ignore
     }
   }
 
-  const serverDir = getServerDataDir(serverId);
-  if (!fs.existsSync(serverDir)) {
-    fs.mkdirSync(serverDir, { recursive: true });
+  return result.sort((a, b) => b.modifiedAt.localeCompare(a.modifiedAt));
+}
+
+/**
+ * Manually restore a server from a local backup archive on disk.
+ * Registers the snapshot in the database if not already tracked.
+ */
+export async function restoreServerFromLocalFile(
+  serverId: string,
+  rawFilename: string,
+  userId: string,
+  opts?: { name?: string },
+  ip?: string,
+): Promise<{ backup: BackupDetail }> {
+  const db = getDatabase();
+  const server = db.select().from(servers).where(eq(servers.id, serverId)).all()[0];
+  if (!server) {
+    throw makeError(404, 'NOT_FOUND', 'Server not found.');
   }
 
-  // Extract snapshot over the target server directory
-  await tar.extract({
-    file: backup.path,
-    cwd: serverDir,
-  });
-
-  // Restart container if it was running previously
-  if (wasRunning && server.containerId) {
-    try {
-      await driver.startContainer(server.containerId);
-      db.update(servers).set({ status: 'running' }).where(eq(servers.id, serverId)).run();
-    } catch (err) {
-      console.warn(`[backups] Could not restart container after restore for ${serverId}:`, err);
-    }
+  const targetPath = safepath.resolve(getBackupsDir(), rawFilename);
+  if (!fs.existsSync(targetPath)) {
+    throw makeError(404, 'NOT_FOUND', 'Specified backup archive does not exist.');
   }
 
-  writeAudit({
-    userId,
-    action: 'server.backup.restore',
-    target: serverId,
-    ip,
-    data: { backupId, filename: path.basename(backup.path) },
-  });
+  let backup = db.select().from(backups).where(eq(backups.path, targetPath)).all()[0];
+  const stat = await fs.promises.stat(targetPath);
+  const now = new Date().toISOString();
+  let backupId: string;
+
+  if (backup) {
+    backupId = backup.id;
+  } else {
+    backupId = nanoid();
+    const displayName = opts?.name?.trim() || path.basename(rawFilename).replace(/\.tar\.gz$/, '').replace(/\.tgz$/, '');
+    db.insert(backups)
+      .values({
+        id: backupId,
+        serverId,
+        createdAt: now,
+        sizeBytes: stat.size,
+        path: targetPath,
+        kind: 'manual',
+        name: displayName,
+        gdriveFileId: null,
+        gdriveWebLink: null,
+      })
+      .run();
+
+    backup = {
+      id: backupId,
+      serverId,
+      createdAt: now,
+      sizeBytes: stat.size,
+      path: targetPath,
+      kind: 'manual',
+      name: displayName,
+      gdriveFileId: null,
+      gdriveWebLink: null,
+    };
+  }
+
+  await restoreServerFromArchiveFile(serverId, targetPath, userId, ip, backupId);
+
+  return {
+    backup: {
+      id: backup.id,
+      serverId: backup.serverId,
+      name: backup.name ?? null,
+      createdAt: backup.createdAt,
+      sizeBytes: backup.sizeBytes,
+      path: backup.path,
+      kind: backup.kind,
+      gdriveFileId: backup.gdriveFileId ?? null,
+      gdriveWebLink: backup.gdriveWebLink ?? null,
+      localExists: true,
+      gdriveSynced: !!backup.gdriveFileId,
+    },
+  };
 }
 
 /**

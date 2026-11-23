@@ -113,9 +113,11 @@ export class CompanionBotRunner {
 
       // Initialize pathfinder plugin if available
       try {
-        const { pathfinder } = await import('mineflayer-pathfinder');
-        if (typeof bot.loadPlugin === 'function') {
-          bot.loadPlugin(pathfinder);
+        const pfMod = await import('mineflayer-pathfinder');
+        const pf = pfMod as unknown as { default?: { pathfinder?: unknown }; pathfinder?: unknown };
+        const pathfinderPlugin = pf.pathfinder ?? pf.default?.pathfinder ?? pf.default;
+        if (typeof bot.loadPlugin === 'function' && typeof pathfinderPlugin === 'function') {
+          bot.loadPlugin(pathfinderPlugin as unknown as mineflayer.Plugin);
         }
       } catch (err) {
         console.warn('[BotRunner] Could not load mineflayer-pathfinder plugin:', err);

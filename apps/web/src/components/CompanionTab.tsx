@@ -309,7 +309,7 @@ export function CompanionTab({ serverId }: CompanionTabProps) {
           title: 'Preparing Companion...',
           message: 'Pulling bot container image and launching runner...',
         });
-        await api.spawnBot(serverId);
+        await api.spawnBot(serverId, true);
         addToast({
           type: 'success',
           title: 'Companion Spawned!',

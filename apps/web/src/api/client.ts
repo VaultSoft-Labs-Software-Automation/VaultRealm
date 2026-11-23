@@ -80,10 +80,31 @@ export interface InstalledMod {
   modifiedAt: string;
 }
 
+export interface InstalledModpackInfo {
+  name: string;
+  versionId?: string;
+  installedAt: string;
+  dependencies?: Record<string, string>;
+  installedModsCount: number;
+  installedFilesCount: number;
+}
+
+export interface InstallModResponse {
+  filename: string;
+  sizeBytes: number;
+  isMrpack?: boolean;
+  modpackName?: string;
+  versionId?: string;
+  installedModsCount?: number;
+  installedFilesCount?: number;
+  skippedClientModsCount?: number;
+}
+
 export interface ServerModsResponse {
   folder: string;
   detectedGameVersion?: string | null;
   serverType?: string | null;
+  modpack?: InstalledModpackInfo | null;
   mods: InstalledMod[];
 }
 
@@ -350,7 +371,7 @@ export const api = {
     id: string,
     data: { downloadUrl: string; filename: string; projectId?: string; title?: string },
   ) =>
-    request<{ filename: string; sizeBytes: number }>(`/api/servers/${id}/mods/install`, {
+    request<InstallModResponse>(`/api/servers/${id}/mods/install`, {
       method: 'POST',
       body: JSON.stringify(data),
     }),
@@ -358,7 +379,7 @@ export const api = {
     id: string,
     data: { filename: string; contentBase64: string },
   ) =>
-    request<{ filename: string; sizeBytes: number }>(`/api/servers/${id}/mods/upload`, {
+    request<InstallModResponse>(`/api/servers/${id}/mods/upload`, {
       method: 'POST',
       body: JSON.stringify(data),
     }),
@@ -433,6 +454,20 @@ export const api = {
     ),
 
   // Admin
+  getTelegramConfig: () => request<PublicTelegramConfig>('/api/system/telegram'),
+  saveTelegramConfig: (data: {
+    token?: string;
+    enabled?: boolean;
+    allowedChatIds?: string[];
+    notificationsEnabled?: boolean;
+  }) => request<{ message: string; config: PublicTelegramConfig }>('/api/system/telegram', {
+    method: 'PUT',
+    body: JSON.stringify(data),
+  }),
+  testTelegramToken: (token: string) => request<{ ok: boolean; botUsername?: string; botFirstName?: string }>('/api/system/telegram/test', {
+    method: 'POST',
+    body: JSON.stringify({ token }),
+  }),
   listInvites: () => request<Array<{ id: string; code: string; uses: number; maxUses: number; createdAt: string }>>('/api/admin/invites'),
   createInvite: (maxUses = 10) =>
     request<{ id: string; code: string; maxUses: number }>('/api/admin/invites', {
@@ -484,9 +519,10 @@ export const api = {
       method: 'PUT',
       body: JSON.stringify(data),
     }),
-  spawnBot: (serverId: string) =>
+  spawnBot: (serverId: string, pull?: boolean) =>
     request<{ success: boolean; status: string; containerId: string }>(`/api/servers/${serverId}/companion/bot/spawn`, {
       method: 'POST',
+      body: pull ? JSON.stringify({ pull: true }) : undefined,
     }),
   despawnBot: (serverId: string) =>
     request<{ success: boolean; status: string }>(`/api/servers/${serverId}/companion/bot/despawn`, {
@@ -531,6 +567,29 @@ export const api = {
     }),
   getServerBackupDownloadUrl: (serverId: string, backupId: string) =>
     `/api/servers/${serverId}/backups/${backupId}/download`,
+  uploadAndRestoreServerBackup: (
+    serverId: string,
+    data: {
+      filename: string;
+      contentBase64: string;
+      name?: string;
+      restoreImmediately?: boolean;
+    },
+  ) =>
+    request<{ backup: BackupDetail; restored: boolean; message: string }>(
+      `/api/servers/${serverId}/backups/upload`,
+      {
+        method: 'POST',
+        body: JSON.stringify(data),
+      },
+    ),
+  getUnindexedBackups: (serverId: string) =>
+    request<{ unindexed: UnindexedBackup[] }>(`/api/servers/${serverId}/backups/unindexed`),
+  restoreServerFromFile: (serverId: string, data: { filename: string; name?: string }) =>
+    request<{ message: string; backup: BackupDetail }>(`/api/servers/${serverId}/backups/restore-file`, {
+      method: 'POST',
+      body: JSON.stringify(data),
+    }),
 
   // System Backups & Google Drive Settings
   getGoogleDriveConfig: () =>
@@ -638,6 +697,24 @@ export interface BackupDetail {
   gdriveFileId: string | null;
   gdriveWebLink: string | null;
   createdAt: string;
+}
+
+export interface UnindexedBackup {
+  filename: string;
+  sizeBytes: number;
+  modifiedAt: string;
+}
+
+export interface PublicTelegramConfig {
+  configured: boolean;
+  enabled: boolean;
+  botUsername?: string;
+  botFirstName?: string;
+  allowedChatIds?: string[];
+  notificationsEnabled: boolean;
+  pollingActive: boolean;
+  hasEnvToken: boolean;
+  updatedAt?: string;
 }
 
 export interface PublicGoogleDriveConfig {
